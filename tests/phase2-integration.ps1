@@ -8,7 +8,18 @@ if (-not $readKey -or -not $writeKey) {
     throw 'Provision local test keys first with: python scripts\provision_phase2_test_keys.py'
 }
 
-$baseUrl = 'http://127.0.0.1:8000'
+$testRateLimit = 0
+$hasTestRateLimit = [int]::TryParse($env:RATE_LIMIT_REQUESTS, [ref]$testRateLimit)
+if (-not $hasTestRateLimit -or $testRateLimit -lt 1) {
+    throw 'Set RATE_LIMIT_REQUESTS to the same low test value used by the server, for example 2.'
+}
+$maxRateLimitAttempts = $testRateLimit + 1
+if ($env:PARCEL_API_BASE_URL) {
+    $baseUrl = $env:PARCEL_API_BASE_URL.TrimEnd('/')
+}
+else {
+    $baseUrl = 'http://127.0.0.1:8000'
+}
 
 function Get-HttpStatus {
     param(
@@ -33,7 +44,7 @@ function Get-HttpStatus {
             $request['ContentType'] = 'application/json'
             $request['Body'] = $Body
         }
-        $response = Invoke-WebRequest @request
+        $response = Invoke-WebRequest @request -UseBasicParsing
         return [int]$response.StatusCode
     }
     catch {
@@ -56,37 +67,46 @@ function Assert-Status {
     Write-Output "$Name passed (HTTP $Actual)."
 }
 
-$knownParcelUrl = "$baseUrl/api/v1/parcels/DEMO-PARCEL-001"
-Assert-Status 'Missing API key' (Get-HttpStatus -Method GET -Uri $knownParcelUrl) 401
-Assert-Status 'Successful parcel lookup' (Get-HttpStatus -Method GET -Uri $knownParcelUrl -ApiKey $readKey) 200
-Assert-Status 'Write scope denied for read-only key' (Get-HttpStatus -Method PATCH -Uri "$knownParcelUrl/status" -ApiKey $readKey -Body '{"status":"in_transit"}') 403
-Assert-Status 'Unknown parcel' (Get-HttpStatus -Method GET -Uri "$baseUrl/api/v1/parcels/DOES-NOT-EXIST" -ApiKey $readKey) 404
+try {
+    $knownParcelUrl = "$baseUrl/api/v1/parcels/DEMO-PARCEL-001"
+    Assert-Status 'Missing API key' (Get-HttpStatus -Method GET -Uri $knownParcelUrl) 401
+    Assert-Status 'Successful parcel lookup' (Get-HttpStatus -Method GET -Uri $knownParcelUrl -ApiKey $readKey) 200
+    Assert-Status 'Write scope denied for read-only key' (Get-HttpStatus -Method PATCH -Uri "$knownParcelUrl/status" -ApiKey $readKey -Body '{"status":"in_transit"}') 403
+    Assert-Status 'Unknown parcel' (Get-HttpStatus -Method GET -Uri "$baseUrl/api/v1/parcels/DOES-NOT-EXIST" -ApiKey $readKey) 404
 
-$trackingId = 'PHASE2-TEST-' + [guid]::NewGuid().ToString('N')
-$createBody = @{
-    tracking_id = $trackingId
-    destination = 'Phase 2 integration test'
-} | ConvertTo-Json -Compress
-$createdStatus = Get-HttpStatus -Method POST -Uri "$baseUrl/api/v1/parcels" -ApiKey $writeKey -Body $createBody
-Assert-Status 'Create parcel' $createdStatus 201
+    $trackingId = 'PHASE2-TEST-' + [guid]::NewGuid().ToString('N')
+    $createBody = @{
+        tracking_id = $trackingId
+        destination = 'Phase 2 integration test'
+    } | ConvertTo-Json -Compress
+    $createdStatus = Get-HttpStatus -Method POST -Uri "$baseUrl/api/v1/parcels" -ApiKey $writeKey -Body $createBody
+    Assert-Status 'Create parcel' $createdStatus 201
 
-$updateStatus = Get-HttpStatus -Method PATCH -Uri "$baseUrl/api/v1/parcels/$trackingId/status" -ApiKey $writeKey -Body '{"status":"in_transit","location":"Test facility"}'
-Assert-Status 'Update parcel status' $updateStatus 200
+    $updateStatus = Get-HttpStatus -Method PATCH -Uri "$baseUrl/api/v1/parcels/$trackingId/status" -ApiKey $writeKey -Body '{"status":"in_transit","location":"Test facility"}'
+    Assert-Status 'Update parcel status' $updateStatus 200
 
-$rateLimited = $false
-for ($attempt = 0; $attempt -lt 65; $attempt++) {
-    $status = Get-HttpStatus -Method GET -Uri $knownParcelUrl -ApiKey $readKey
-    if ($status -eq 429) {
-        $rateLimited = $true
-        break
+    $rateLimited = $false
+    for ($attempt = 1; $attempt -le $maxRateLimitAttempts; $attempt++) {
+        $progressStatus = "Authenticated request $attempt of $maxRateLimitAttempts"
+        $progressPercent = ($attempt / $maxRateLimitAttempts) * 100
+        Write-Progress -Activity 'Testing API rate limit' -Status $progressStatus -PercentComplete $progressPercent
+        $status = Get-HttpStatus -Method GET -Uri $knownParcelUrl -ApiKey $readKey
+        Write-Output "Rate-limit probe $attempt/$maxRateLimitAttempts -> HTTP $status"
+        if ($status -eq 429) {
+            $rateLimited = $true
+            break
+        }
+        if ($status -ne 200) {
+            throw "Rate-limit test failed early with HTTP $status."
+        }
     }
-    if ($status -ne 200) {
-        throw "Rate-limit test failed early with HTTP $status."
+    Write-Progress -Activity 'Testing API rate limit' -Completed
+    if (-not $rateLimited) {
+        throw "Rate-limit test failed: no HTTP 429 received within $maxRateLimitAttempts requests."
     }
+    Write-Output 'Rate limit passed (HTTP 429).'
 }
-if (-not $rateLimited) {
-    throw 'Rate-limit test failed: no HTTP 429 received within 65 requests.'
+finally {
+    Write-Progress -Activity 'Testing API rate limit' -Completed
+    Remove-Variable readKeyOutput, writeKeyOutput, readKey, writeKey -ErrorAction SilentlyContinue
 }
-Write-Output 'Rate limit passed (HTTP 429).'
-
-Remove-Variable readKeyOutput, writeKeyOutput, readKey, writeKey

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import app, get_supabase_client
+from app import app, get_rate_limit_requests, get_supabase_client
 
 READ_KEY = "local-read-key"
 WRITE_KEY = "local-write-key"
@@ -42,7 +42,7 @@ class FakeTable:
         return self
 
     def execute(self):
-        if self.name == "api_keys" and self.operation == "select":
+        if self.name == "api_keys" and self.operation == "update":
             keys = {
                 hashlib.sha256(READ_KEY.encode()).hexdigest(): {
                     "id": "test-read-key-id",
@@ -56,7 +56,9 @@ class FakeTable:
                 },
             }
             row = keys.get(self.filters.get("key_hash"))
-            return SimpleNamespace(data=[row] if row else [])
+            if self.filters.get("revoked_at") == "null" and row:
+                return SimpleNamespace(data=[row])
+            return SimpleNamespace(data=[])
 
         if self.name == "parcels":
             tracking_id = self.filters.get("tracking_id")
@@ -154,6 +156,28 @@ def test_health_check(api_client) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_rate_limit_defaults_to_safe_value(monkeypatch) -> None:
+    monkeypatch.delenv("RATE_LIMIT_REQUESTS", raising=False)
+
+    assert get_rate_limit_requests() == 60
+
+
+def test_rate_limit_can_be_lowered_for_integration_tests(monkeypatch) -> None:
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", "5")
+
+    assert get_rate_limit_requests() == 5
+
+
+@pytest.mark.parametrize("configured_limit", ["0", "-1", "not-a-number", "10001"])
+def test_rate_limit_rejects_unsafe_configuration(
+    monkeypatch, configured_limit: str
+) -> None:
+    monkeypatch.setenv("RATE_LIMIT_REQUESTS", configured_limit)
+
+    with pytest.raises(RuntimeError, match="RATE_LIMIT_REQUESTS"):
+        get_rate_limit_requests()
 
 
 def test_missing_api_key_returns_401_envelope(api_client) -> None:

@@ -16,7 +16,26 @@ from supabase import Client, create_client
 load_dotenv(".env.local")
 
 logger = logging.getLogger(__name__)
-RATE_LIMIT_REQUESTS = 60
+DEFAULT_RATE_LIMIT_REQUESTS = 60
+MAX_RATE_LIMIT_REQUESTS = 10_000
+
+
+def get_rate_limit_requests() -> int:
+    configured_limit = os.getenv("RATE_LIMIT_REQUESTS")
+    if configured_limit is None:
+        return DEFAULT_RATE_LIMIT_REQUESTS
+    try:
+        limit = int(configured_limit)
+    except ValueError as exc:
+        raise RuntimeError("RATE_LIMIT_REQUESTS must be a positive integer.") from exc
+    if not 1 <= limit <= MAX_RATE_LIMIT_REQUESTS:
+        raise RuntimeError(
+            f"RATE_LIMIT_REQUESTS must be between 1 and {MAX_RATE_LIMIT_REQUESTS}."
+        )
+    return limit
+
+
+RATE_LIMIT_REQUESTS = get_rate_limit_requests()
 app = FastAPI(title="Parcel and Delivery Tracking Assistant")
 
 
@@ -158,9 +177,10 @@ def authenticate_api_key(
     key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
     result = (
         db.table("api_keys")
-        .select("id,owner_id,scopes")
+        .update({"last_used_at": datetime.now(timezone.utc).isoformat()})
         .eq("key_hash", key_hash)
         .is_("revoked_at", "null")
+        .select("id,owner_id,scopes")
         .limit(1)
         .execute()
     )
@@ -168,10 +188,6 @@ def authenticate_api_key(
         raise api_error(401, "invalid_api_key", "The API key is invalid or revoked.")
 
     key_record = result.data[0]
-    db.table("api_keys").update(
-        {"last_used_at": datetime.now(timezone.utc).isoformat()}
-    ).eq("id", key_record["id"]).execute()
-
     return APIKeyPrincipal(
         id=str(key_record["id"]),
         owner_id=str(key_record["owner_id"]),

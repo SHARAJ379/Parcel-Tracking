@@ -80,7 +80,12 @@ Supabase when finished.
 
 All `/api/v1` routes require the `x-api-key` header. Keys are SHA-256 hashed
 before lookup, checked for revocation, and restricted to their stored owner and
-scopes. Read and write requests are limited to 60 per API key per minute.
+scopes. Read and write requests default to 60 per API key per UTC minute. Set
+`RATE_LIMIT_REQUESTS` to a positive integer from 1 through 10,000 to tune that
+limit; the production default remains 60. Each request window is aligned to a
+UTC minute. The Supabase client is cached for the process lifetime. API-key
+validation and `last_used_at` update share one database call; the limiter and
+parcel/timeline queries remain separate.
 
 - `POST /api/v1/parcels` (write): create a parcel and its initial timeline event.
 - `GET /api/v1/parcels/{tracking_id}` (read): get an owner-scoped parcel and
@@ -110,15 +115,26 @@ python -m pytest
 ```
 
 For the API integration checks, first run the migration and provision the
-local test keys as described above. Start the server with
-`python -m uvicorn app:app --reload`, then run:
+local test keys as described above. Use the same low limit in both PowerShell
+windows so the test can reach 429 well within one 60-second window:
 
 ```powershell
+$env:RATE_LIMIT_REQUESTS = '2'
+python -m uvicorn app:app --reload --port 8001
+```
+
+In the second window:
+
+```powershell
+$env:RATE_LIMIT_REQUESTS = '2'
+$env:PARCEL_API_BASE_URL = 'http://127.0.0.1:8001'
 .\tests\phase2-integration.ps1
 ```
 
 The integration script checks success, 401, 403, 404, and 429 responses, plus
-parcel creation and status updates. It creates a uniquely named test parcel.
+parcel creation and status updates. It shows each rate-limit probe and creates
+a uniquely named test parcel. The configured test limit affects only the test
+server; do not lower the production default to make this test pass.
 
 ## Deployment
 
