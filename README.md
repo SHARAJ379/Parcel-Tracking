@@ -7,8 +7,8 @@ to real courier services.
 
 Development is being completed in phases. Phase 1 added the project scaffold;
 Phase 2 adds API-key-authenticated parcel endpoints and their Supabase
-migration. Gemini, webhooks, public/admin pages, and deployment configuration
-will be added in later phases.
+migration. Phase 3 adds the Gemini assistant; webhooks, public/admin pages, and
+deployment configuration will be added in later phases.
 
 ## Requirements
 
@@ -92,6 +92,16 @@ parcel/timeline queries remain separate.
   chronological timeline.
 - `PATCH /api/v1/parcels/{tracking_id}/status` (write): update status and add a
   timeline event in one database transaction.
+- `POST /api/v1/assistant` (read): ask about one owner's parcel and its
+  timeline using Gemini.
+
+The assistant request body is `{"tracking_id": "DEMO-PARCEL-001",
+"question": "What is the current status?"}`. Questions are limited to 1,000
+characters. The model receives only that owner's parcel and its timeline;
+question text and record values are explicitly treated as untrusted data.
+Missing parcel records return 404 without calling Gemini. Gemini timeouts
+return 504, upstream quota limits return 429, and other upstream or empty
+responses return 502 without exposing provider details.
 
 API responses use `{"success": true, "data": ...}` or
 `{"success": false, "error": {"code": ..., "message": ...}}`. Invalid input is
@@ -135,6 +145,31 @@ The integration script checks success, 401, 403, 404, and 429 responses, plus
 parcel creation and status updates. It shows each rate-limit probe and creates
 a uniquely named test parcel. The configured test limit affects only the test
 server; do not lower the production default to make this test pass.
+
+## Phase 3: Gemini assistant
+
+Set `GEMINI_API_KEY` and `GEMINI_MODEL` in ignored `.env.local`. The SDK client
+uses the configured model and a 15-second request timeout. To run its mocked
+tests:
+
+```powershell
+python -m pytest
+```
+
+For live endpoint checks, start the app and then run the test script in another
+PowerShell window:
+
+```powershell
+python -m uvicorn app:app --reload
+```
+
+```powershell
+.\tests\phase3-assistant.ps1
+```
+
+The live script checks missing-key, unknown-parcel and question-length errors,
+then asks Gemini about the seeded `DEMO-PARCEL-001` parcel. It reads the
+existing test key from `.env.local` without printing it.
 
 ## Deployment
 
