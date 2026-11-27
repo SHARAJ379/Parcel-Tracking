@@ -695,7 +695,14 @@ def generate_assistant_answer(
                 "assistant_quota_exceeded",
                 "The assistant is temporarily rate-limited. Please try again later.",
             ) from None
-        logger.error("Gemini request failed with HTTP status %s.", exc.code)
+        # Google's status and message explain the failure (bad key, unknown
+        # model, ...). They never contain the API key, so they are safe to log.
+        logger.error(
+            "Gemini request failed with HTTP status %s (%s): %s",
+            exc.code,
+            exc.status,
+            exc.message,
+        )
         raise api_error(
             502,
             "assistant_upstream_error",
