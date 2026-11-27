@@ -3,18 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#25323c">
+  <meta name="description" content="Parcel tracking and delivery operations.">
   <title>{% block title %}Parcel Tracking{% endblock %}</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <header>
-    <a class="brand" href="/">Parcel Tracking</a>
-    <nav>
-      <a href="/">Track</a>
-      <a href="/docs-guide">API Guide</a>
-      <a href="/admin">Admin</a>
-    </nav>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/">Parcel Tracking</a>
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/" {% if request.url.path == "/" %}aria-current="page"{% endif %}>Tracking</a>
+        <a href="/docs-guide" {% if request.url.path == "/docs-guide" %}aria-current="page"{% endif %}>API guide</a>
+        <a href="/admin" {% if request.url.path.startswith("/admin") %}aria-current="page"{% endif %}>Admin</a>
+      </nav>
+    </div>
   </header>
-  <main>{% block content %}{% endblock %}</main>
+  <main id="main-content" class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span>Parcel Tracking <span aria-hidden="true">·</span> Operations</span>
+      <a href="/docs">API reference</a>
+    </div>
+  </footer>
 </body>
 </html>

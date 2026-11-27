@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Request error{% endblock %}
+{% block content %}
+<section class="error-page">
+  <p class="error-code">{{ status_code }}</p>
+  <h1>Request could not be completed</h1>
+  <p>{{ error_message }}</p>
+  <a class="button-link" href="/">Parcel tracking</a>
+</section>
+{% endblock %}

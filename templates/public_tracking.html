@@ -1,35 +1,84 @@
 {% extends "base.html" %}
-{% block title %}Track a parcel{% endblock %}
+{% block title %}Parcel tracking{% endblock %}
 {% block content %}
-<section class="card">
-  <h1>Track a parcel</h1>
-  <form method="get" action="/">
+<section class="tracking-page" aria-labelledby="tracking-title">
+  <h1 id="tracking-title">Track a parcel</h1>
+  <form method="get" action="/" class="tracking-search" data-loading-form>
     <label for="tracking_id">Tracking ID</label>
-    <input id="tracking_id" name="tracking_id" value="{{ tracking_id }}" maxlength="80" required>
-    <button type="submit">Track parcel</button>
+    <div class="search-controls">
+      <input id="tracking_id" name="tracking_id" value="{{ tracking_id }}" maxlength="80" placeholder="Enter tracking ID" autocomplete="off" required>
+      <button type="submit"><span class="button-label">Search</span><span class="button-loading" hidden>Searching…</span></button>
+    </div>
   </form>
+  <p class="sample-links"><span>Sample IDs:</span>
+    {% for sample_id in ["DEMO-PARCEL-001", "DEMO-PARCEL-002", "DEMO-PARCEL-003"] %}
+    <a href="/?tracking_id={{ sample_id }}">{{ sample_id }}</a>
+    {% endfor %}
+  </p>
 </section>
 
 {% if not_found %}
-<section class="card warning"><h2>Parcel not found</h2><p>No parcel matches that tracking ID.</p></section>
-{% elif parcel %}
-<section class="card">
-  <h2>{{ parcel.tracking_id }}</h2>
-  <dl>
-    <dt>Status</dt><dd>{{ parcel.status }}</dd>
-    <dt>Destination</dt><dd>{{ parcel.destination }}</dd>
-    <dt>ETA</dt><dd>{{ parcel.eta or "Not provided" }}</dd>
-  </dl>
-  <h3>Timeline</h3>
-  {% if timeline %}
-  <ol class="timeline">
-    {% for event in timeline %}
-    <li><strong>{{ event.status }}</strong><span>{{ event.occurred_at }}</span>{% if event.location %}<span>{{ event.location }}</span>{% endif %}{% if event.description %}<p>{{ event.description }}</p>{% endif %}</li>
-    {% endfor %}
-  </ol>
-  {% else %}
-  <p>No timeline events.</p>
-  {% endif %}
+<section class="notice notice-error" role="status">
+  <strong>Parcel not found.</strong>
+  <span>Check the tracking ID and try again.</span>
 </section>
+{% elif parcel %}
+<section class="parcel-summary" aria-labelledby="parcel-title">
+  <div class="summary-id">
+    <h2 id="parcel-title" class="tracking-code">{{ parcel.tracking_id }}</h2>
+    <span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|title }}</span>
+  </div>
+  <div class="summary-fact"><span>Destination</span><strong>{{ parcel.destination }}</strong></div>
+  <div class="summary-fact"><span>Estimated arrival</span><strong>{{ parcel.eta|ist_datetime }}</strong></div>
+  <div class="summary-fact"><span>Last update</span><strong>{{ parcel.updated_at|ist_datetime }}</strong></div>
+</section>
+
+<div class="tracking-columns">
+  <section class="timeline-section" aria-labelledby="timeline-title">
+    <h2 id="timeline-title">Delivery timeline</h2>
+    <p class="section-note">Times shown in IST</p>
+    {% if timeline %}
+    <ol class="timeline">
+      {% for event in timeline %}
+      <li class="timeline-item {% if loop.last %}timeline-current{% endif %}">
+        <span class="timeline-dot" aria-hidden="true"></span>
+        <div class="timeline-content">
+          <div class="timeline-topline">
+            <strong>{{ event.status|replace('_', ' ')|title }}</strong>
+            <time>{{ event.occurred_at|ist_datetime }}</time>
+          </div>
+          {% if event.location %}<p class="timeline-location">{{ event.location }}</p>{% endif %}
+          {% if event.description %}<p>{{ event.description }}</p>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="empty-state">No delivery updates have been recorded.</p>
+    {% endif %}
+  </section>
+
+  <aside class="assistant-panel" aria-labelledby="assistant-title">
+    <h2 id="assistant-title">Parcel assistant</h2>
+    <p class="section-note">Ask about this parcel’s status or updates.</p>
+    <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-relevant="additions text">
+      <p class="chat-message chat-assistant">I can answer using the tracking details shown here.</p>
+    </div>
+    <p class="suggestion-label">Suggested questions</p>
+    <div class="suggestion-list">
+      <button class="suggestion-chip" type="button" data-question="What is the current status?">Current status?</button>
+      <button class="suggestion-chip" type="button" data-question="When is the estimated arrival?">Estimated arrival?</button>
+      <button class="suggestion-chip" type="button" data-question="What was the latest update?">Latest update?</button>
+    </div>
+    <form class="chat-form" data-assistant-form data-tracking-id="{{ parcel.tracking_id }}">
+      <label class="sr-only" for="assistant-question">Ask a question about this parcel</label>
+      <textarea id="assistant-question" name="question" rows="2" maxlength="1000" placeholder="Enter a question" required></textarea>
+      <button type="submit" aria-label="Send question"><span class="button-label">Send</span><span class="button-loading" hidden>Asking…</span></button>
+      <p class="assistant-status" data-assistant-status aria-live="polite"></p>
+    </form>
+  </aside>
+</div>
+{% else %}
+<p class="empty-state page-empty">Enter a tracking ID to view its delivery status and timeline.</p>
 {% endif %}
 {% endblock %}

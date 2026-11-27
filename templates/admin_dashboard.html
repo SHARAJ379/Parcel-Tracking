@@ -1,83 +1,132 @@
 {% extends "base.html" %}
-{% block title %}Admin dashboard{% endblock %}
+{% block title %}Admin operations{% endblock %}
 {% block content %}
-<section class="toolbar">
-  <h1>Admin dashboard</h1>
+<section class="page-heading admin-heading">
+  <div><h1>Admin operations</h1><p>Parcels, API access, and webhook delivery history.</p></div>
   <form method="post" action="/admin/logout">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button class="secondary" type="submit">Log out</button>
+    <button class="button-secondary" type="submit">Sign out</button>
   </form>
 </section>
 
-<section class="card">
-  <h2>Create parcel</h2>
-  <form method="post" action="/admin/parcels" class="grid">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Tracking ID<input name="tracking_id" minlength="3" maxlength="80" required></label>
-    <label>Destination<input name="destination" maxlength="200" required></label>
-    <label>ETA<input name="eta" type="datetime-local"></label>
-    <button type="submit">Create</button>
-  </form>
-</section>
+{% if notice %}<p class="notice notice-success" role="status">{{ notice }}</p>{% endif %}
 
-<section class="card">
-  <h2>Parcels</h2>
-  {% for parcel in parcels %}
-  <article class="row">
-    <strong>{{ parcel.tracking_id }}</strong>
-    <span>{{ parcel.status }}</span>
-    <form method="post" action="/admin/parcels/{{ parcel.tracking_id }}/status" class="grid inline">
+<nav class="admin-tabs" role="tablist" aria-label="Admin sections">
+  <button type="button" role="tab" id="tab-parcels" aria-controls="panel-parcels" aria-selected="true">Parcels</button>
+  <button type="button" role="tab" id="tab-keys" aria-controls="panel-keys" aria-selected="false" tabindex="-1">API keys</button>
+  <button type="button" role="tab" id="tab-webhooks" aria-controls="panel-webhooks" aria-selected="false" tabindex="-1">Webhooks</button>
+</nav>
+
+<section class="tab-panel" id="panel-parcels" role="tabpanel" aria-labelledby="tab-parcels">
+  <section class="admin-section">
+    <h2>Create a parcel</h2>
+    <form method="post" action="/admin/parcels" class="form-grid" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <select name="status" aria-label="New status">
-        {% for status in ["created","picked_up","in_transit","out_for_delivery","delivered","delayed","failed_delivery"] %}
-        <option value="{{ status }}">{{ status }}</option>
-        {% endfor %}
-      </select>
-      <input name="location" maxlength="200" placeholder="Location">
-      <button type="submit">Update</button>
+      <label for="new-tracking-id">Tracking ID<input id="new-tracking-id" name="tracking_id" minlength="3" maxlength="80" required></label>
+      <label for="new-destination">Destination<input id="new-destination" name="destination" maxlength="200" required></label>
+      <label for="new-eta">Estimated arrival<input id="new-eta" name="eta" type="datetime-local"></label>
+      <button type="submit"><span class="button-label">Create parcel</span><span class="button-loading" hidden>Creating…</span></button>
     </form>
-  </article>
-  {% else %}<p>No parcels.</p>{% endfor %}
+  </section>
+  <section class="admin-section">
+    <h2>Recent parcels</h2>
+    {% if parcels %}
+    <div class="table-scroll" role="region" aria-label="Recent parcels" tabindex="0">
+      <table>
+        <thead><tr><th scope="col">Tracking ID</th><th scope="col">Destination</th><th scope="col">Status</th><th scope="col">ETA</th><th scope="col">Update status</th></tr></thead>
+        <tbody>
+          {% for parcel in parcels %}
+          <tr>
+            <td><strong class="tracking-code">{{ parcel.tracking_id }}</strong></td>
+            <td>{{ parcel.destination }}</td>
+            <td><span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|title }}</span></td>
+            <td>{{ parcel.eta|ist_datetime }}</td>
+            <td>
+              <form method="post" action="/admin/parcels/{{ parcel.tracking_id }}/status" class="inline-form" data-loading-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label class="sr-only" for="status-{{ loop.index }}">Status for {{ parcel.tracking_id }}</label>
+                <select id="status-{{ loop.index }}" name="status">
+                  {% for status in ["created","picked_up","in_transit","out_for_delivery","delivered","delayed","failed_delivery"] %}
+                  <option value="{{ status }}" {% if status == parcel.status %}selected{% endif %}>{{ status|replace('_', ' ')|title }}</option>
+                  {% endfor %}
+                </select>
+                <label class="sr-only" for="location-{{ loop.index }}">Update location for {{ parcel.tracking_id }}</label>
+                <input id="location-{{ loop.index }}" name="location" maxlength="200" placeholder="Location">
+                <button class="button-small" type="submit"><span class="button-label">Save</span><span class="button-loading" hidden>Saving…</span></button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty-state">No parcels yet. Create one above to begin.</p>
+    {% endif %}
+  </section>
 </section>
 
-<section class="card">
-  <h2>Create API key</h2>
-  <form method="post" action="/admin/api-keys" class="grid">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Name<input name="name" maxlength="100" required></label>
-    <label>Scopes<select name="scopes"><option value="read">read</option><option value="write">write</option><option value="read,write">read, write</option></select></label>
-    <button type="submit">Create key</button>
-  </form>
-  {% for key in api_keys %}
-  <article class="row">
-    <strong>{{ key.name }}</strong><span>{{ key.key_prefix }}...</span>
-    <span>{{ key.scopes|join(", ") }}</span>
-    {% if not key.revoked_at %}
-    <form method="post" action="/admin/api-keys/{{ key.id }}/revoke">
+<section class="tab-panel" id="panel-keys" role="tabpanel" aria-labelledby="tab-keys" hidden>
+  <section class="admin-section">
+    <h2>Create an API key</h2>
+    <form method="post" action="/admin/api-keys" class="form-grid" data-loading-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button class="danger" type="submit">Revoke</button>
+      <label for="key-name">Key name<input id="key-name" name="name" maxlength="100" placeholder="Application name" required></label>
+      <label for="key-scopes">Permissions<select id="key-scopes" name="scopes"><option value="read">Read only</option><option value="read,write">Read and write</option></select></label>
+      <button type="submit"><span class="button-label">Create API key</span><span class="button-loading" hidden>Creating…</span></button>
     </form>
-    {% else %}<span>Revoked</span>{% endif %}
-  </article>
-  {% endfor %}
+  </section>
+  <section class="admin-section">
+    <h2>API keys</h2>
+    {% if api_keys %}
+    <div class="table-scroll" role="region" aria-label="API keys" tabindex="0">
+      <table>
+        <thead><tr><th scope="col">Name</th><th scope="col">Key prefix</th><th scope="col">Permissions</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col">Action</th></tr></thead>
+        <tbody>{% for key in api_keys %}
+          <tr>
+            <td><strong>{{ key.name }}</strong></td><td><code>{{ key.key_prefix }}…</code></td>
+            <td>{{ key.scopes|join(", ") }}</td><td>{{ key.last_used_at|ist_datetime }}</td>
+            <td>{% if key.revoked_at %}<span class="status-badge status-failed">Revoked</span>{% else %}<span class="status-badge status-delivered">Active</span>{% endif %}</td>
+            <td>{% if not key.revoked_at %}
+              <form method="post" action="/admin/api-keys/{{ key.id }}/revoke" data-confirm="Revoke this API key? Applications using it will lose access." data-loading-form>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="button-small button-danger" type="submit"><span class="button-label">Revoke</span><span class="button-loading" hidden>Revoking…</span></button>
+              </form>
+            {% else %}<span class="muted">No action</span>{% endif %}</td>
+          </tr>
+        {% endfor %}</tbody>
+      </table>
+    </div>
+    {% else %}<p class="empty-state">No API keys have been created.</p>{% endif %}
+  </section>
 </section>
 
-<section class="card">
-  <h2>Webhook endpoints</h2>
-  {% for webhook in webhooks %}
-  <p><strong>{{ webhook.url }}</strong> - {{ "active" if webhook.active else "inactive" }}</p>
-  {% else %}<p>No webhook endpoints.</p>{% endfor %}
-</section>
-
-<section class="card">
-  <h2>Recent webhook deliveries</h2>
-  {% for delivery in deliveries %}
-  <article class="row">
-    <span>{{ delivery.attempted_at }}</span>
-    <span>attempt {{ delivery.attempt_number }}</span>
-    <span>HTTP {{ delivery.response_status or "error" }}</span>
-    <span>{{ delivery.error or "success" }}</span>
-  </article>
-  {% else %}<p>No delivery attempts.</p>{% endfor %}
+<section class="tab-panel" id="panel-webhooks" role="tabpanel" aria-labelledby="tab-webhooks" hidden>
+  <section class="admin-section">
+    <h2>Webhook endpoints</h2>
+    {% if webhooks %}
+    <div class="table-scroll" role="region" aria-label="Webhook endpoints" tabindex="0">
+      <table><thead><tr><th scope="col">Endpoint</th><th scope="col">Events</th><th scope="col">State</th><th scope="col">Created</th></tr></thead>
+      <tbody>{% for webhook in webhooks %}<tr>
+        <td class="wrap-cell"><a href="{{ webhook.url }}" rel="noreferrer">{{ webhook.url }}</a></td><td>{{ webhook.events|join(", ") }}</td>
+        <td><span class="status-badge {% if webhook.active %}status-delivered{% else %}status-failed{% endif %}">{{ "Active" if webhook.active else "Inactive" }}</span></td>
+        <td>{{ webhook.created_at|ist_datetime }}</td>
+      </tr>{% endfor %}</tbody></table>
+    </div>
+    {% else %}<p class="empty-state">No webhook endpoints are registered.</p>{% endif %}
+  </section>
+  <section class="admin-section">
+    <h2>Recent delivery attempts</h2>
+    {% if deliveries %}
+    <div class="table-scroll" role="region" aria-label="Recent webhook deliveries" tabindex="0">
+      <table><thead><tr><th scope="col">Attempted</th><th scope="col">Parcel</th><th scope="col">Attempt</th><th scope="col">Result</th><th scope="col">Details</th></tr></thead>
+      <tbody>{% for delivery in deliveries %}<tr>
+        <td>{{ delivery.attempted_at|ist_datetime }}</td><td><code>{{ delivery.parcel_id }}</code></td><td>{{ delivery.attempt_number }}</td>
+        <td>{% if delivery.response_status and delivery.response_status < 300 %}<span class="status-badge status-delivered">HTTP {{ delivery.response_status }}</span>{% else %}<span class="status-badge status-failed">{{ "HTTP " ~ delivery.response_status if delivery.response_status else "Failed" }}</span>{% endif %}</td>
+        <td class="wrap-cell">{{ delivery.error or delivery.response_body or "Delivered successfully" }}</td>
+      </tr>{% endfor %}</tbody></table>
+    </div>
+    {% else %}<p class="empty-state">No webhook delivery attempts have been recorded.</p>{% endif %}
+  </section>
 </section>
 {% endblock %}

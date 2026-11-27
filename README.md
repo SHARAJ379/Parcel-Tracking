@@ -1,21 +1,14 @@
 # Parcel and Delivery Tracking Assistant
 
-A Python/FastAPI university assignment project. The app will provide simulated
-parcel tracking, a Gemini assistant grounded in parcel records, authenticated
-API endpoints, signed webhooks, and a small admin interface. It does not connect
-to real courier services.
-
-Development is being completed in phases. Phase 1 added the project scaffold;
-Phase 2 adds API-key-authenticated parcel endpoints and their Supabase
-migration. Phase 3 adds the Gemini assistant. Phase 4 adds signed webhooks;
-Phase 5 adds public tracking and the admin interface; deployment configuration
-will be added in the final phase.
+A FastAPI application for simulated parcel tracking, parcel-grounded assistant
+answers, authenticated API endpoints, signed webhooks, and admin operations.
+It does not connect to real courier services.
 
 ## Requirements
 
 - Python 3.14 (pinned in `.python-version` and supported by Vercel)
 - PowerShell on Windows
-- A Supabase project and Gemini API key for the later integration phases
+- A Supabase project and Gemini API key
 
 ## Windows PowerShell setup
 
@@ -237,13 +230,14 @@ $null = Invoke-RestMethod -Uri "$baseUrl/api/v1/webhooks/$webhookId" -Method DEL
 Remove-Variable readKey, writeKey, webhookSecret
 ```
 
-## Phase 5: Public and admin interface
+## Web interface and admin
 
 Set `ADMIN_PASSWORD` and `SESSION_SECRET` in ignored `.env.local`. The public
 tracking page is at `/`, and the admin login is at `/admin/login`.
 
 - `/` accepts a `tracking_id` query parameter and displays status, ETA and
-  timeline without using an API key.
+  timeline without using an API key. The public page includes a parcel-grounded
+  assistant chat; its requests are rate-limited by client IP.
 - `/admin/login` signs in with `ADMIN_PASSWORD` and uses a signed, HttpOnly,
   SameSite=Lax session cookie.
 - `/admin` provides parcel creation/status updates, API-key creation/revocation,
@@ -251,15 +245,20 @@ tracking page is at `/`, and the admin login is at `/admin/login`.
 - Admin POST forms require a hidden CSRF token tied to the signed session.
 - `/docs-guide` provides a small project-specific API and webhook guide; FastAPI
   still provides interactive `/docs`.
+- Jinja templates, plain CSS and minimal vanilla JavaScript are served from
+  `templates/` and `static/`; no frontend build step is required.
 
 Use a separate browser session or clear cookies before testing admin login.
 API keys created in the admin page are displayed once and stored only by hash.
 
 ## Deployment
 
-The application entrypoint is `app.py`, as recognized by Vercel's Python
-runtime. Deployment instructions and environment variable configuration will
-be added after the application features are implemented.
+The application entrypoint is `app.py`. Configure the environment variables
+listed in `.env.example` in the hosting provider's project settings. Keep the
+`templates/` and `static/` directories alongside the application entrypoint.
+[`vercel.json`](./vercel.json) explicitly includes both directories in the
+Python function bundle because the template and static asset paths are resolved
+at runtime.
 
 ## Official setup references
 

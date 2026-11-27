@@ -13,6 +13,7 @@ import webhooks as webhook_service
 from app import (
     UNKNOWN_PARCEL_ANSWER,
     app,
+    format_ist_datetime,
     get_gemini_client,
     get_rate_limit_requests,
     get_supabase_client,
@@ -886,7 +887,68 @@ def test_public_tracking_page_looks_up_parcel(api_client) -> None:
 
     assert response.status_code == 200
     assert "DEMO-PARCEL-001" in response.text
-    assert "in_transit" in response.text
+    assert "In Transit" in response.text
+
+
+def test_ist_datetime_format_is_clear_and_timezone_aware() -> None:
+    assert format_ist_datetime("2026-11-27T03:30:00Z") == "27 Nov 2026, 09:00 AM IST"
+
+
+def test_public_assistant_uses_requested_parcel_and_rate_limit(
+    api_client, monkeypatch
+) -> None:
+    client, database = api_client
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+
+    response = client.post(
+        "/ui/assistant",
+        json={
+            "tracking_id": "DEMO-PARCEL-001",
+            "question": "What is the current status?",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "data": {"answer": "The parcel is in transit."},
+    }
+    prompt = json.loads(database.gemini.models.calls[0]["contents"])
+    assert prompt["parcel_records"]["parcel"]["tracking_id"] == "DEMO-PARCEL-001"
+
+
+def test_browser_unknown_page_uses_custom_404(api_client) -> None:
+    client, _ = api_client
+
+    response = client.get("/not-a-real-page", headers={"accept": "text/html"})
+    api_response = client.get("/api/v1/not-a-route")
+
+    assert response.status_code == 404
+    assert "Page not found" in response.text
+    assert api_response.status_code == 404
+    assert api_response.json() == {"detail": "Not Found"}
+
+
+def test_public_rate_limit_shows_friendly_page_error(api_client) -> None:
+    client, database = api_client
+    database.rate_limit_allowed = False
+
+    response = client.get("/", headers={"accept": "text/html"})
+
+    assert response.status_code == 429
+    assert "request limit has been reached" in response.text
+
+
+def test_frontend_assets_are_served_without_a_build_step(api_client) -> None:
+    client, _ = api_client
+
+    stylesheet = client.get("/static/styles.css")
+    script = client.get("/static/app.js")
+
+    assert stylesheet.status_code == 200
+    assert "--page:" in stylesheet.text
+    assert script.status_code == 200
+    assert "textContent" in script.text
 
 
 def test_admin_login_and_dashboard_require_valid_session(api_client, monkeypatch) -> None:
@@ -904,7 +966,7 @@ def test_admin_login_and_dashboard_require_valid_session(api_client, monkeypatch
     assert login.status_code == 303
     assert login.cookies.get("parcel_admin_session")
     assert dashboard.status_code == 200
-    assert "Admin dashboard" in dashboard.text
+    assert "Admin operations" in dashboard.text
 
 
 def test_admin_post_requires_csrf_token(api_client, monkeypatch) -> None:
