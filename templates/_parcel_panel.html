@@ -1,27 +1,69 @@
-{# Parcel status and timeline. Rendered on page load and returned by /ui/assistant. #}
-<section class="parcel-card" aria-labelledby="parcel-title">
-  <div class="parcel-card-head">
+{# Parcel status, progress and timeline. Rendered on page load and returned by /ui/assistant. #}
+{% set step_keys = ["created", "picked_up", "in_transit", "out_for_delivery", "delivered"] %}
+{% set step_labels = ["Created", "Picked up", "In transit", "Out for delivery", "Delivered"] %}
+{# How far along the normal route the parcel is. For a normal status that is the
+   status itself; for delayed or failed, it is the furthest step in the timeline. #}
+{% set ns = namespace(reached=0) %}
+{% if parcel.status in step_keys %}
+  {% set ns.reached = step_keys.index(parcel.status) %}
+{% else %}
+  {% for event in timeline %}
+    {% if event.status in step_keys and step_keys.index(event.status) > ns.reached %}
+      {% set ns.reached = step_keys.index(event.status) %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+{% set problem = parcel.status if parcel.status in ["delayed", "failed_delivery"] else "" %}
+{% set status_text = parcel.status|replace('_', ' ')|capitalize %}
+<section class="parcel-card status-tone-{{ parcel.status|replace('_', '-') }}" aria-labelledby="parcel-title">
+  <header class="parcel-card-head">
+    <p class="eyebrow">Tracking ID</p>
     <h2 id="parcel-title" class="tracking-code">{{ parcel.tracking_id }}</h2>
-    <span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|title }}</span>
+  </header>
+
+  <div class="parcel-status">
+    <p class="parcel-status-label"><span class="status-dot" aria-hidden="true"></span>{{ status_text }}</p>
+    {% if parcel.status == "delivered" %}
+    <p class="parcel-eta"><span>Delivered to</span> {{ parcel.destination }}</p>
+    {% else %}
+    <p class="parcel-eta"><span>Estimated arrival</span> {{ parcel.eta|ist_datetime }}</p>
+    {% endif %}
   </div>
+
+  <ol class="tracker" style="--progress: {{ (ns.reached / 4 * 100)|round|int }}%" aria-label="Delivery progress">
+    {% for key in step_keys %}
+    {% set i = loop.index0 %}
+    {% if i < ns.reached or (i == ns.reached and key == "delivered") %}{% set state = "done" %}
+    {% elif i == ns.reached and not problem %}{% set state = "current" %}
+    {% elif i == ns.reached + 1 and problem %}{% set state = problem|replace('_', '-') %}
+    {% elif i == ns.reached %}{% set state = "done" %}
+    {% else %}{% set state = "todo" %}{% endif %}
+    <li class="tracker-step is-{{ state }}" {% if state in ["current", "delayed", "failed-delivery"] %}aria-current="step"{% endif %}>
+      <span class="tracker-dot" aria-hidden="true"></span>
+      <span class="tracker-label">
+        {% if state == "delayed" %}Delayed{% elif state == "failed-delivery" %}Delivery failed{% else %}{{ step_labels[i] }}{% endif %}
+        <span class="sr-only">{% if state == "done" %}(completed){% elif state == "todo" %}(not yet){% else %}(current){% endif %}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ol>
+
   <dl class="parcel-facts">
     <div><dt>Destination</dt><dd>{{ parcel.destination }}</dd></div>
-    <div><dt>Estimated arrival</dt><dd>{{ parcel.eta|ist_datetime }}</dd></div>
     <div><dt>Last update</dt><dd>{{ parcel.updated_at|ist_datetime }}</dd></div>
   </dl>
-  <h3>Delivery timeline <span class="section-note">IST</span></h3>
+
+  <h3 class="timeline-title">Timeline</h3>
   {% if timeline %}
   <ol class="timeline">
     {% for event in timeline|reverse %}
-    <li class="timeline-item {% if loop.first %}timeline-current{% endif %}">
+    <li class="timeline-item{% if loop.first %} is-latest{% endif %} event-{{ event.status|replace('_', '-') }}">
       <span class="timeline-dot" aria-hidden="true"></span>
       <div class="timeline-content">
-        <div class="timeline-topline">
-          <strong>{{ event.status|replace('_', ' ')|title }}</strong>
-          <time>{{ event.occurred_at|ist_datetime }}</time>
-        </div>
+        <p class="timeline-status">{{ event.status|replace('_', ' ')|capitalize }}</p>
         {% if event.location %}<p class="timeline-location">{{ event.location }}</p>{% endif %}
-        {% if event.description %}<p>{{ event.description }}</p>{% endif %}
+        {% if event.description %}<p class="timeline-description">{{ event.description }}</p>{% endif %}
+        <time class="timeline-time">{{ event.occurred_at|ist_datetime }}</time>
       </div>
     </li>
     {% endfor %}

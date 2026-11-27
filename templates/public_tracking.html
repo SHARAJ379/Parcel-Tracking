@@ -1,47 +1,60 @@
 {% extends "base.html" %}
 {% block title %}Parcel assistant{% endblock %}
+{% block main_class %}site-main-wide{% endblock %}
 {% block content %}
 <div class="home-layout">
   <section class="chat-panel" aria-labelledby="assistant-title">
-    <div class="chat-panel-head">
+    <header class="chat-head">
       <h1 id="assistant-title">Parcel assistant</h1>
-      <p class="section-note">Ask about a parcel in English, Hindi or Kannada. Answers come only from tracking records.</p>
+      <a class="chat-details-link" href="#parcel-details">Parcel details</a>
+      <p class="chat-subtitle">Answers come only from tracking records. English, हिन्दी or ಕನ್ನಡ.</p>
+    </header>
+
+    <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-label="Conversation">
+      <div class="msg msg-assistant">
+        <p class="bubble">{% if parcel %}You’re viewing {{ parcel.tracking_id }}. Ask me anything about its status or delivery.{% else %}Hello. Send me your tracking ID, for example “Where is DEMO-PARCEL-001?”, and I’ll check its records.{% endif %}</p>
+        <time class="msg-time" data-time-now></time>
+      </div>
     </div>
-    <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-relevant="additions text">
-      {% if parcel %}
-      <p class="chat-message chat-assistant">Showing parcel {{ parcel.tracking_id }}. What would you like to know about it?</p>
-      {% else %}
-      <p class="chat-message chat-assistant">Type your tracking ID in a message, for example “Where is DEMO-PARCEL-001?”, or search for it.</p>
-      {% endif %}
-    </div>
-    <div class="suggestion-list" aria-label="Suggested questions">
-      <button class="suggestion-chip" type="button" data-question="Where is DEMO-PARCEL-001?">Where is DEMO-PARCEL-001?</button>
-      <button class="suggestion-chip" type="button" data-question="When will it arrive?">When will it arrive?</button>
-      <button class="suggestion-chip" type="button" data-question="What was the latest update?">Latest update?</button>
-      <button class="suggestion-chip" type="button" data-question="मेरा पार्सल अभी कहाँ है?" lang="hi">Hindi example</button>
-      <button class="suggestion-chip" type="button" data-question="ನನ್ನ ಪಾರ್ಸೆಲ್ ಯಾವಾಗ ಬರುತ್ತದೆ?" lang="kn">Kannada example</button>
-    </div>
-    <form class="chat-form" data-assistant-form data-tracking-id="{{ parcel.tracking_id if parcel else '' }}">
-      <label class="sr-only" for="assistant-question">Message the parcel assistant</label>
-      <textarea id="assistant-question" name="question" rows="2" maxlength="1000" placeholder="Ask about your parcel" required></textarea>
-      <button type="submit"><span class="button-label">Send</span><span class="button-loading" hidden>Sending</span></button>
+
+    <div class="chat-compose">
+      <div class="suggestion-list" aria-label="Suggested questions">
+        <button class="chip" type="button" data-question="Where is DEMO-PARCEL-001?">Where is DEMO-PARCEL-001?</button>
+        <button class="chip" type="button" data-question="When will it arrive?">When will it arrive?</button>
+        <button class="chip" type="button" data-question="What was the latest update?">Latest update</button>
+        <button class="chip" type="button" data-question="मेरा पार्सल DEMO-PARCEL-002 अभी कहाँ है?" lang="hi">हिन्दी में पूछें</button>
+        <button class="chip" type="button" data-question="ನನ್ನ ಪಾರ್ಸೆಲ್ DEMO-PARCEL-003 ಯಾವಾಗ ತಲುಪಿತು?" lang="kn">ಕನ್ನಡದಲ್ಲಿ ಕೇಳಿ</button>
+      </div>
+      <form class="chat-form" data-assistant-form data-tracking-id="{{ parcel.tracking_id if parcel else '' }}">
+        <label class="sr-only" for="assistant-question">Message the parcel assistant</label>
+        <textarea id="assistant-question" name="question" rows="1" maxlength="1000" placeholder="Ask about your parcel" required></textarea>
+        <button class="send-button" type="submit">
+          <span class="button-label"><span class="sr-only">Send</span><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <span class="button-loading" hidden><span class="sr-only">Sending</span></span>
+        </button>
+      </form>
       <p class="assistant-status" data-assistant-status aria-live="polite"></p>
-    </form>
+    </div>
   </section>
 
-  <aside class="parcel-side" aria-label="Parcel details">
+  <aside class="parcel-side" id="parcel-details" aria-label="Parcel details">
     <form method="get" action="/" class="tracking-search" data-loading-form>
-      <label for="tracking_id">Tracking ID</label>
+      <label for="tracking_id">Track a parcel</label>
       <div class="search-controls">
-        <input id="tracking_id" name="tracking_id" value="{{ tracking_id }}" maxlength="80" placeholder="Enter tracking ID" autocomplete="off" required>
-        <button type="submit"><span class="button-label">Search</span><span class="button-loading" hidden>Searching</span></button>
+        <input id="tracking_id" name="tracking_id" class="mono-input" value="{{ tracking_id }}" maxlength="80" placeholder="Enter tracking ID" autocomplete="off" spellcheck="false" required>
+        <button type="submit" class="button-secondary"><span class="button-label">Track</span><span class="button-loading" hidden>Tracking</span></button>
       </div>
     </form>
-    <p class="sample-links"><span>Sample IDs:</span>
-      {% for sample_id in ["DEMO-PARCEL-001", "DEMO-PARCEL-002", "DEMO-PARCEL-003"] %}
-      <a href="/?tracking_id={{ sample_id }}">{{ sample_id }}</a>
-      {% endfor %}
-    </p>
+
+    {# Filled by app.js from this browser's storage; never sent to the server. #}
+    <section class="recent-parcels" data-recent-parcels aria-labelledby="recent-title" hidden>
+      <div class="recent-head">
+        <h2 id="recent-title" class="eyebrow">Recent on this device</h2>
+        <button type="button" class="link-button" data-recent-clear>Clear</button>
+      </div>
+      <ul class="recent-list" data-recent-list></ul>
+    </section>
+
     <div data-parcel-panel>
       {% if not_found %}
       <section class="notice notice-error" role="status">
@@ -51,7 +64,15 @@
       {% elif parcel %}
       {% include "_parcel_panel.html" %}
       {% else %}
-      <p class="empty-state">Parcel status and timeline appear here once a tracking ID is found.</p>
+      <section class="parcel-card parcel-empty">
+        <p class="eyebrow">No parcel selected</p>
+        <p>Status, progress and the delivery timeline appear here once the assistant or the search finds a parcel.</p>
+        <p class="sample-links"><span>Try a sample:</span>
+          {% for sample_id in ["DEMO-PARCEL-001", "DEMO-PARCEL-002", "DEMO-PARCEL-003"] %}
+          <a class="tracking-code" href="/?tracking_id={{ sample_id }}">{{ sample_id }}</a>
+          {% endfor %}
+        </p>
+      </section>
       {% endif %}
     </div>
   </aside>

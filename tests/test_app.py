@@ -893,7 +893,7 @@ def test_public_tracking_page_looks_up_parcel(api_client) -> None:
 
     assert response.status_code == 200
     assert "DEMO-PARCEL-001" in response.text
-    assert "In Transit" in response.text
+    assert "In transit" in response.text
 
 
 def test_ist_datetime_format_is_clear_and_timezone_aware() -> None:
@@ -959,12 +959,13 @@ def test_frontend_assets_are_served_without_a_build_step(api_client) -> None:
 
 def test_admin_login_and_dashboard_require_valid_session(api_client, monkeypatch) -> None:
     client, _ = api_client
+    monkeypatch.setenv("ADMIN_USERNAME", "test-admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
 
     login = client.post(
         "/admin/login",
-        data={"password": "test-admin-password"},
+        data={"username": "test-admin", "password": "test-admin-password"},
         follow_redirects=False,
     )
     dashboard = client.get("/admin", follow_redirects=False)
@@ -977,11 +978,12 @@ def test_admin_login_and_dashboard_require_valid_session(api_client, monkeypatch
 
 def test_admin_post_requires_csrf_token(api_client, monkeypatch) -> None:
     client, _ = api_client
+    monkeypatch.setenv("ADMIN_USERNAME", "test-admin")
     monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
     client.post(
         "/admin/login",
-        data={"password": "test-admin-password"},
+        data={"username": "test-admin", "password": "test-admin-password"},
         follow_redirects=False,
     )
 
@@ -1129,3 +1131,94 @@ def test_assistant_rules_cover_language_scope_and_ist_times(api_client, monkeypa
     assert prompt["untrusted_question"] == "ಇದು ಯಾವಾಗ ಬರುತ್ತದೆ?"
     assert prompt["parcel_records"]["parcel"]["eta"] == "01 Dec 2026, 03:30 PM IST"
     assert "id" not in prompt["parcel_records"]["parcel"]
+
+
+def test_admin_login_rejects_wrong_username_or_password(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    monkeypatch.setenv("ADMIN_USERNAME", "test-admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+
+    wrong_user = client.post(
+        "/admin/login",
+        data={"username": "someone", "password": "test-admin-password"},
+        follow_redirects=False,
+    )
+    wrong_password = client.post(
+        "/admin/login",
+        data={"username": "test-admin", "password": "wrong"},
+        follow_redirects=False,
+    )
+    non_ascii = client.post(
+        "/admin/login",
+        data={"username": "ಅಡ್ಮಿನ್", "password": "पासवर्ड"},
+        follow_redirects=False,
+    )
+
+    for response in (wrong_user, wrong_password, non_ascii):
+        assert response.status_code == 401
+        assert "Invalid username or password." in response.text
+        assert not response.cookies.get("parcel_admin_session")
+
+
+def test_admin_login_requires_username_to_be_configured(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+
+    response = client.post(
+        "/admin/login",
+        data={"username": "anyone", "password": "test-admin-password"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 500
+    assert not response.cookies.get("parcel_admin_session")
+
+
+def test_admin_session_expires_and_rejects_tampered_cookies(api_client, monkeypatch) -> None:
+    import app as app_module
+
+    client, _ = api_client
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    valid = app_module.encode_admin_session("csrf-token")
+    assert app_module.decode_admin_session(valid)["csrf"] == "csrf-token"
+
+    monkeypatch.setattr(app_module, "ADMIN_SESSION_SECONDS", -1)
+    expired = app_module.encode_admin_session("csrf-token")
+    assert app_module.decode_admin_session(expired) is None
+
+    payload, signature = valid.rsplit(".", 1)
+    assert app_module.decode_admin_session(payload + ".ü" + signature) is None
+    assert app_module.decode_admin_session("ü." + signature) is None
+
+    client.cookies.set("parcel_admin_session", expired)
+    response = client.get("/admin", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+
+def test_admin_login_cookie_has_eight_hour_lifetime(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    monkeypatch.setenv("ADMIN_USERNAME", "test-admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    login = client.post(
+        "/admin/login",
+        data={"username": "test-admin", "password": "test-admin-password"},
+        follow_redirects=False,
+    )
+
+    cookie_header = login.headers["set-cookie"]
+    assert "Max-Age=28800" in cookie_header
+    assert "HttpOnly" in cookie_header
+
+
+def test_admin_eta_without_timezone_is_read_as_ist() -> None:
+    from app import parse_admin_eta
+
+    eta = parse_admin_eta("2026-12-01T10:00")
+    assert eta.isoformat() == "2026-12-01T10:00:00+05:30"
+    assert format_ist_datetime(eta) == "01 Dec 2026, 10:00 AM IST"
+    assert parse_admin_eta("2026-12-01T10:00:00+00:00").utcoffset().total_seconds() == 0
+    assert parse_admin_eta("") is None

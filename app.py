@@ -65,6 +65,9 @@ def get_rate_limit_requests() -> int:
 RATE_LIMIT_REQUESTS = get_rate_limit_requests()
 
 
+IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+
+
 def format_ist_datetime(value: object) -> str:
     if not value:
         return "Not provided"
@@ -76,13 +79,13 @@ def format_ist_datetime(value: object) -> str:
         return str(value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    ist = timezone(timedelta(hours=5, minutes=30), name="IST")
-    return parsed.astimezone(ist).strftime("%d %b %Y, %I:%M %p IST")
+    return parsed.astimezone(IST).strftime("%d %b %Y, %I:%M %p IST")
 
 
 app = FastAPI(title="Parcel and Delivery Tracking Assistant")
 templates = Jinja2Templates(directory="templates")
 ADMIN_SESSION_COOKIE = "parcel_admin_session"
+ADMIN_SESSION_SECONDS = 8 * 60 * 60  # admins must sign in again after 8 hours
 templates.env.filters["ist_datetime"] = format_ist_datetime
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -199,15 +202,29 @@ def get_gemini_model() -> str:
     return model
 
 
-def get_admin_password() -> str:
+def get_admin_credentials() -> tuple[str, str]:
+    username = os.getenv("ADMIN_USERNAME")
     password = os.getenv("ADMIN_PASSWORD")
-    if not password:
+    if not username or not password:
         raise api_error(
             500,
             "server_configuration_error",
             "The admin service is not configured.",
         )
-    return password
+    return username, password
+
+
+def credentials_match(username: str, password: str) -> bool:
+    expected_username, expected_password = get_admin_credentials()
+    # Constant-time comparisons on bytes (also safe for non-ASCII input).
+    # Both are always checked, so timing does not reveal which one was wrong.
+    username_ok = hmac.compare_digest(
+        username.encode("utf-8"), expected_username.encode("utf-8")
+    )
+    password_ok = hmac.compare_digest(
+        password.encode("utf-8"), expected_password.encode("utf-8")
+    )
+    return username_ok and password_ok
 
 
 def get_session_secret() -> str:
@@ -222,8 +239,10 @@ def get_session_secret() -> str:
 
 
 def encode_admin_session(csrf_token: str) -> str:
+    # "exp" (Unix seconds) is inside the signed payload, so it cannot be edited.
+    expires_at = int(datetime.now(timezone.utc).timestamp()) + ADMIN_SESSION_SECONDS
     payload = json.dumps(
-        {"authenticated": True, "csrf": csrf_token},
+        {"authenticated": True, "csrf": csrf_token, "exp": expires_at},
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
@@ -242,10 +261,13 @@ def decode_admin_session(cookie_value: str | None) -> dict | None:
     encoded_payload, supplied_signature = cookie_value.rsplit(".", 1)
     expected_signature = hmac.new(
         get_session_secret().encode("utf-8"),
-        encoded_payload.encode("ascii"),
+        # A tampered cookie may contain any characters; treat it as invalid.
+        encoded_payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    if not hmac.compare_digest(supplied_signature, expected_signature):
+    if not hmac.compare_digest(
+        supplied_signature.encode("utf-8"), expected_signature.encode("ascii")
+    ):
         return None
     try:
         payload = json.loads(
@@ -254,6 +276,10 @@ def decode_admin_session(cookie_value: str | None) -> dict | None:
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if payload.get("authenticated") is not True or not payload.get("csrf"):
+        return None
+    expires_at = payload.get("exp")
+    now = datetime.now(timezone.utc).timestamp()
+    if not isinstance(expires_at, int) or expires_at <= now:
         return None
     return payload
 
@@ -749,13 +775,15 @@ def admin_login_page(request: Request) -> HTMLResponse:
 @app.post("/admin/login")
 def admin_login(
     request: Request,
+    username: str = Form(...),
     password: str = Form(...),
 ) -> RedirectResponse:
-    if not hmac.compare_digest(password, get_admin_password()):
+    if not credentials_match(username, password):
+        # One message for both cases, so it does not reveal valid usernames.
         return templates.TemplateResponse(
             request,
             "admin_login.html",
-            {"error": "Invalid admin password."},
+            {"error": "Invalid username or password.", "username": username},
             status_code=401,
         )
     csrf_token = secrets.token_urlsafe(32)
@@ -763,6 +791,7 @@ def admin_login(
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
         encode_admin_session(csrf_token),
+        max_age=ADMIN_SESSION_SECONDS,
         httponly=True,
         secure=os.getenv("COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
         samesite="lax",
@@ -836,6 +865,14 @@ def admin_dashboard(
     )
 
 
+def parse_admin_eta(value: str) -> datetime | None:
+    """The admin form's datetime-local field has no timezone; admins enter IST."""
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=IST)
+
+
 @app.post("/admin/parcels")
 def admin_create_parcel(
     request: Request,
@@ -851,7 +888,7 @@ def admin_create_parcel(
         payload = ParcelCreate(
             tracking_id=tracking_id,
             destination=destination,
-            eta=datetime.fromisoformat(eta) if eta else None,
+            eta=parse_admin_eta(eta),
         )
     except Exception as exc:
         raise api_error(400, "validation_error", str(exc)) from exc

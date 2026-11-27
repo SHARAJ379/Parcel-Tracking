@@ -255,7 +255,8 @@ Remove-Variable readKey, writeKey, webhookSecret
 
 ## Web interface and admin
 
-Set `ADMIN_PASSWORD` and `SESSION_SECRET` in ignored `.env.local`. The public
+Set `ADMIN_USERNAME`, `ADMIN_PASSWORD` and `SESSION_SECRET` in ignored
+`.env.local`. The public
 tracking page is at `/`, and the admin login is at `/admin/login`.
 
 - `/` is built around the assistant chat, with the parcel's status, ETA and
@@ -265,8 +266,14 @@ tracking page is at `/`, and the admin login is at `/admin/login`.
   to `POST /ui/assistant`, which uses the same logic as the API and returns a
   server-rendered parcel panel so the side panel follows the conversation.
   Requests are rate-limited by client IP.
-- `/admin/login` signs in with `ADMIN_PASSWORD` and uses a signed, HttpOnly,
-  SameSite=Lax session cookie.
+- `/admin/login` signs in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` (both
+  compared in constant time, with one error message for either mistake) and
+  uses a signed, HttpOnly, SameSite=Lax session cookie that expires after
+  8 hours. Set `COOKIE_SECURE=true` on HTTPS hosting such as Vercel.
+- The admin "Estimated arrival" field is entered in IST.
+- The home page lists the last 5 parcels found under "Recent on this
+  device". They are kept only in that browser's localStorage and are never
+  sent to the server.
 - `/admin` provides parcel creation/status updates, API-key creation/revocation,
   webhook endpoint status, and recent delivery logs.
 - Admin POST forms require a hidden CSRF token tied to the signed session.

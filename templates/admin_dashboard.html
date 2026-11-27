@@ -24,7 +24,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label for="new-tracking-id">Tracking ID<input id="new-tracking-id" name="tracking_id" minlength="3" maxlength="80" required></label>
       <label for="new-destination">Destination<input id="new-destination" name="destination" maxlength="200" required></label>
-      <label for="new-eta">Estimated arrival<input id="new-eta" name="eta" type="datetime-local"></label>
+      <label for="new-eta">Estimated arrival (IST)<input id="new-eta" name="eta" type="datetime-local"></label>
       <button type="submit"><span class="button-label">Create parcel</span><span class="button-loading" hidden>Creating…</span></button>
     </form>
   </section>
@@ -39,7 +39,7 @@
           <tr>
             <td><strong class="tracking-code">{{ parcel.tracking_id }}</strong></td>
             <td>{{ parcel.destination }}</td>
-            <td><span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|title }}</span></td>
+            <td><span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|capitalize }}</span></td>
             <td>{{ parcel.eta|ist_datetime }}</td>
             <td>
               <form method="post" action="/admin/parcels/{{ parcel.tracking_id }}/status" class="inline-form" data-loading-form>
@@ -47,7 +47,7 @@
                 <label class="sr-only" for="status-{{ loop.index }}">Status for {{ parcel.tracking_id }}</label>
                 <select id="status-{{ loop.index }}" name="status">
                   {% for status in ["created","picked_up","in_transit","out_for_delivery","delivered","delayed","failed_delivery"] %}
-                  <option value="{{ status }}" {% if status == parcel.status %}selected{% endif %}>{{ status|replace('_', ' ')|title }}</option>
+                  <option value="{{ status }}" {% if status == parcel.status %}selected{% endif %}>{{ status|replace('_', ' ')|capitalize }}</option>
                   {% endfor %}
                 </select>
                 <label class="sr-only" for="location-{{ loop.index }}">Update location for {{ parcel.tracking_id }}</label>
