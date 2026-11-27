@@ -1006,6 +1006,11 @@ def docs_guide(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "docs_guide.html", {})
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_policy(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "privacy.html", {})
+
+
 @app.post("/api/v1/parcels", status_code=201)
 def create_parcel(
     payload: ParcelCreate,

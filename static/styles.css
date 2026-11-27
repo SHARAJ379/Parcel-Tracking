@@ -420,6 +420,8 @@ td .tracking-code { overflow-wrap: normal; white-space: nowrap; }
 .docs-section h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; font-size: 21px; }
 .docs-section h3 { margin-top: 20px; }
 .docs-section p { color: var(--text-secondary); }
+.docs-section ul { margin: 0 0 12px; padding-left: 20px; color: var(--text-secondary); }
+.docs-section li { margin-bottom: 6px; }
 .method-label { padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--radius-small); color: var(--text-secondary); background: var(--surface-muted); font-family: var(--font-mono); font-size: 12px; font-stretch: normal; font-weight: 500; letter-spacing: 0; }
 .docs-section p code, .docs-section li code { padding: 1px 5px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface-muted); font-size: 13px; }
 .code-block { position: relative; margin: 12px 0; }

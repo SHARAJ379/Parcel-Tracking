@@ -896,6 +896,29 @@ def test_public_tracking_page_looks_up_parcel(api_client) -> None:
     assert "In transit" in response.text
 
 
+def test_privacy_page_is_public_and_linked_from_footer(api_client) -> None:
+    client, _ = api_client
+    page = client.get("/privacy")
+    home = client.get("/")
+
+    assert page.status_code == 200
+    assert "Privacy policy" in page.text
+    assert 'href="/privacy"' in home.text
+
+
+def test_pages_have_link_preview_tags_with_an_image_that_exists(api_client) -> None:
+    client, _ = api_client
+    home = client.get("/")
+    privacy = client.get("/privacy")
+
+    assert 'property="og:image" content="http://testserver/static/og-image.png"' in home.text
+    assert 'name="twitter:card" content="summary_large_image"' in home.text
+    # Each page keeps its own title and description in the preview card.
+    assert 'property="og:title" content="Privacy policy · Parcel Tracking"' in privacy.text
+    assert "What data Parcel Tracking collects" in privacy.text
+    assert client.get("/static/og-image.png").status_code == 200
+
+
 def test_ist_datetime_format_is_clear_and_timezone_aware() -> None:
     assert format_ist_datetime("2026-11-27T03:30:00Z") == "27 Nov 2026, 09:00 AM IST"
 

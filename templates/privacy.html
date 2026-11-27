@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Privacy policy{% endblock %}
+{% block description %}What data Parcel Tracking collects, who receives it and how to ask for deletion.{% endblock %}
+{% block content %}
+<section class="docs-heading">
+  <h1>Privacy policy</h1>
+  <p>What this service collects, who receives it, and how to ask for it to be removed.</p>
+  <p>Last updated 27 November 2026. This is a university project and this policy has not been reviewed by a lawyer.</p>
+</section>
+<div class="docs-content">
+  <section class="docs-section">
+    <h2>What we collect</h2>
+    <p>There are no visitor accounts, sign-up forms or email addresses. The service stores:</p>
+    <ul>
+      <li><strong>Parcel records:</strong> tracking ID, status, expected delivery time, destination, and timeline events (description, location, time).</li>
+      <li><strong>Rate-limit counters:</strong> a one-way SHA-256 hash of your IP address, or the ID of an API key, with a request count per minute. Your IP address itself is not stored.</li>
+      <li><strong>API keys:</strong> only a hash and a short prefix of each key, never the key itself. The administrator also stores the key name and scopes.</li>
+      <li><strong>Webhooks:</strong> the endpoint URL, its signing secret, and a log of each delivery attempt (payload and the response received).</li>
+    </ul>
+  </section>
+  <section class="docs-section">
+    <h2>The assistant</h2>
+    <p>When you ask the assistant a question, your message, up to ten earlier messages from the same conversation, and the records of the parcel you asked about are sent to Google's Gemini service to produce a reply. Chat messages are not saved in our database. Do not type personal details that are not needed to look up a parcel.</p>
+  </section>
+  <section class="docs-section">
+    <h2>Cookies and browser storage</h2>
+    <ul>
+      <li>Administrators receive a signed session cookie that lasts eight hours. It is used only for sign-in and is not sent for visitors.</li>
+      <li>Your light or dark theme choice is kept in your browser's local storage. It never leaves your device.</li>
+    </ul>
+    <p>There is no advertising or analytics tracking.</p>
+  </section>
+  <section class="docs-section">
+    <h2>Who receives data</h2>
+    <ul>
+      <li><strong>Supabase:</strong> stores the database.</li>
+      <li><strong>Vercel:</strong> hosts the site and keeps standard request logs, such as time, page and IP address.</li>
+      <li><strong>Google Gemini:</strong> receives assistant questions and parcel records as described above.</li>
+      <li><strong>Google Fonts:</strong> your browser loads fonts from Google, which can see your IP address.</li>
+      <li><strong>Webhook endpoints:</strong> HTTPS URLs registered by an API user receive parcel status updates for that user's parcels.</li>
+    </ul>
+    <p>Data is not sold.</p>
+  </section>
+  <section class="docs-section">
+    <h2>How long data is kept</h2>
+    <p>Parcel records, webhook logs and rate-limit counters stay in the database until the administrator deletes them. There is no automatic deletion yet. Vercel keeps its own logs for the period set by its plan.</p>
+  </section>
+  <section class="docs-section">
+    <h2>Deletion and questions</h2>
+    <p>To ask for a parcel record or other data to be removed, or to ask what is held about a tracking ID, contact the project owner, Sharaj R Shetty, and include the tracking ID. Under laws such as the GDPR and India's DPDP Act you may also ask to see or correct your data.</p>
+  </section>
+</div>
+{% endblock %}
