@@ -1,22 +1,30 @@
 import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
+import base64
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Annotated, Literal
+from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Form
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import httpx2
-from postgrest.exceptions import APIError as PostgrestAPIError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types as genai_types
+from postgrest.exceptions import APIError as PostgrestAPIError
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from supabase import Client, create_client
+
+from webhooks import deliver_status_updated, validate_webhook_url
 
 load_dotenv(".env.local")
 
@@ -45,6 +53,9 @@ def get_rate_limit_requests() -> int:
 
 RATE_LIMIT_REQUESTS = get_rate_limit_requests()
 app = FastAPI(title="Parcel and Delivery Tracking Assistant")
+templates = Jinja2Templates(directory="templates")
+ADMIN_SESSION_COOKIE = "parcel_admin_session"
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 class ParcelCreate(BaseModel):
@@ -83,6 +94,17 @@ class AssistantRequest(BaseModel):
         if not question.strip():
             raise ValueError("Question must not be blank.")
         return question
+
+
+class WebhookCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("url")
+    @classmethod
+    def webhook_url_must_be_public_https(cls, url: str) -> str:
+        return validate_webhook_url(url)
 
 
 class APIKeyPrincipal(BaseModel):
@@ -136,6 +158,107 @@ def get_gemini_model() -> str:
     return model
 
 
+def get_admin_password() -> str:
+    password = os.getenv("ADMIN_PASSWORD")
+    if not password:
+        raise api_error(
+            500,
+            "server_configuration_error",
+            "The admin service is not configured.",
+        )
+    return password
+
+
+def get_session_secret() -> str:
+    secret = os.getenv("SESSION_SECRET")
+    if not secret:
+        raise api_error(
+            500,
+            "server_configuration_error",
+            "The session service is not configured.",
+        )
+    return secret
+
+
+def encode_admin_session(csrf_token: str) -> str:
+    payload = json.dumps(
+        {"authenticated": True, "csrf": csrf_token},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded_payload = base64.urlsafe_b64encode(payload).decode("ascii")
+    signature = hmac.new(
+        get_session_secret().encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{encoded_payload}.{signature}"
+
+
+def decode_admin_session(cookie_value: str | None) -> dict | None:
+    if not cookie_value or "." not in cookie_value:
+        return None
+    encoded_payload, supplied_signature = cookie_value.rsplit(".", 1)
+    expected_signature = hmac.new(
+        get_session_secret().encode("utf-8"),
+        encoded_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(supplied_signature, expected_signature):
+        return None
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(encoded_payload.encode("ascii")).decode("utf-8")
+        )
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if payload.get("authenticated") is not True or not payload.get("csrf"):
+        return None
+    return payload
+
+
+def require_admin(request: Request) -> dict:
+    session = decode_admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if session is None:
+        raise HTTPException(status_code=303, headers={"Location": "/admin/login"})
+    return session
+
+
+def verify_csrf(request: Request, session: dict, submitted_token: str) -> None:
+    cookie_token = session["csrf"]
+    if (
+        not submitted_token
+        or not hmac.compare_digest(submitted_token, cookie_token)
+    ):
+        raise api_error(
+            400,
+            "csrf_validation_error",
+            "The form session is invalid or expired.",
+        )
+
+
+def consume_public_ip_limit(request: Request, db: Client) -> None:
+    now = datetime.now(timezone.utc)
+    window_start = now.replace(second=0, microsecond=0).isoformat()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    ip_hash = hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
+    result = db.rpc(
+        "consume_rate_limit",
+        {
+            "p_api_key_id": None,
+            "p_client_ip_hash": ip_hash,
+            "p_window_start": window_start,
+            "p_limit": RATE_LIMIT_REQUESTS,
+        },
+    ).execute()
+    if not result.data or not result.data[0]["allowed"]:
+        raise api_error(
+            429,
+            "rate_limit_exceeded",
+            "The request limit has been reached. Try again next minute.",
+        )
+
+
 def api_error(status_code: int, code: str, message: str) -> HTTPException:
     return HTTPException(
         status_code=status_code,
@@ -148,6 +271,11 @@ async def http_error_handler(
     request: Request, exc: HTTPException
 ) -> JSONResponse:
     del request
+    if exc.status_code == 303 and exc.headers and exc.headers.get("Location"):
+        return RedirectResponse(
+            url=exc.headers["Location"],
+            status_code=303,
+        )
     if isinstance(exc.detail, dict):
         error = exc.detail
     else:
@@ -308,6 +436,273 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/", response_class=HTMLResponse)
+def public_tracking(
+    request: Request,
+    tracking_id: str | None = None,
+    db: Client = Depends(get_supabase_client),
+) -> HTMLResponse:
+    consume_public_ip_limit(request, db)
+    parcel = None
+    timeline = []
+    not_found = False
+    if tracking_id:
+        result = (
+            db.table("parcels")
+            .select("id,tracking_id,status,eta,destination,created_at,updated_at")
+            .eq("tracking_id", tracking_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            parcel = result.data[0]
+            event_result = (
+                db.table("parcel_events")
+                .select("status,description,location,occurred_at")
+                .eq("parcel_id", parcel["id"])
+                .order("occurred_at", desc=False)
+                .execute()
+            )
+            timeline = event_result.data or []
+        else:
+            not_found = True
+    return templates.TemplateResponse(
+        request,
+        "public_tracking.html",
+        {
+            "tracking_id": tracking_id or "",
+            "parcel": parcel,
+            "timeline": timeline,
+            "not_found": not_found,
+        },
+    )
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page(request: Request) -> HTMLResponse:
+    session = decode_admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if session:
+        return RedirectResponse("/admin", status_code=303)
+    return templates.TemplateResponse(request, "admin_login.html", {"error": None})
+
+
+@app.post("/admin/login")
+def admin_login(
+    request: Request,
+    password: str = Form(...),
+) -> RedirectResponse:
+    if not hmac.compare_digest(password, get_admin_password()):
+        return templates.TemplateResponse(
+            request,
+            "admin_login.html",
+            {"error": "Invalid admin password."},
+            status_code=401,
+        )
+    csrf_token = secrets.token_urlsafe(32)
+    response = RedirectResponse("/admin", status_code=303)
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        encode_admin_session(csrf_token),
+        httponly=True,
+        secure=os.getenv("COOKIE_SECURE", "").lower() in {"1", "true", "yes"},
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/admin/logout")
+def admin_logout(
+    request: Request,
+    csrf_token: str = Form(...),
+) -> RedirectResponse:
+    session = require_admin(request)
+    verify_csrf(request, session, csrf_token)
+    response = RedirectResponse("/admin/login", status_code=303)
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
+    return response
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(
+    request: Request,
+    db: Client = Depends(get_supabase_client),
+) -> HTMLResponse:
+    session = require_admin(request)
+    parcel_result = (
+        db.table("parcels")
+        .select("id,tracking_id,status,eta,destination,updated_at")
+        .order("updated_at", desc=True)
+        .limit(50)
+        .execute()
+    )
+    webhook_result = (
+        db.table("webhooks")
+        .select("id,url,events,active,created_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    key_result = (
+        db.table("api_keys")
+        .select("id,name,key_prefix,scopes,created_at,last_used_at,revoked_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
+    delivery_result = (
+        db.table("webhook_deliveries")
+        .select(
+            "id,webhook_id,parcel_id,event_type,attempt_number,"
+            "response_status,response_body,error,attempted_at"
+        )
+        .order("attempted_at", desc=True)
+        .limit(100)
+        .execute()
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin_dashboard.html",
+        {
+            "csrf_token": session["csrf"],
+            "parcels": parcel_result.data or [],
+            "webhooks": webhook_result.data or [],
+            "api_keys": key_result.data or [],
+            "deliveries": delivery_result.data or [],
+        },
+    )
+
+
+@app.post("/admin/parcels")
+def admin_create_parcel(
+    request: Request,
+    csrf_token: str = Form(...),
+    tracking_id: str = Form(...),
+    destination: str = Form(...),
+    eta: str = Form(default=""),
+    db: Client = Depends(get_supabase_client),
+) -> RedirectResponse:
+    session = require_admin(request)
+    verify_csrf(request, session, csrf_token)
+    try:
+        payload = ParcelCreate(
+            tracking_id=tracking_id,
+            destination=destination,
+            eta=datetime.fromisoformat(eta) if eta else None,
+        )
+    except Exception as exc:
+        raise api_error(400, "validation_error", str(exc)) from exc
+    db.rpc(
+        "create_parcel_with_event",
+        {
+            "p_owner_id": os.getenv("SAMPLE_OWNER_ID") or "20000000-0000-4000-8000-000000000001",
+            "p_tracking_id": payload.tracking_id,
+            "p_destination": payload.destination,
+            "p_eta": payload.eta.isoformat() if payload.eta else None,
+        },
+    ).execute()
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/parcels/{tracking_id}/status")
+def admin_update_status(
+    request: Request,
+    tracking_id: str,
+    csrf_token: str = Form(...),
+    status: str = Form(...),
+    location: str = Form(default=""),
+    db: Client = Depends(get_supabase_client),
+) -> RedirectResponse:
+    session = require_admin(request)
+    verify_csrf(request, session, csrf_token)
+    try:
+        payload = ParcelStatusUpdate(
+            status=status,
+            location=location or None,
+        )
+    except Exception as exc:
+        raise api_error(400, "validation_error", str(exc)) from exc
+    result = db.rpc(
+        "update_parcel_status_with_event",
+        {
+            "p_owner_id": os.getenv("SAMPLE_OWNER_ID") or "20000000-0000-4000-8000-000000000001",
+            "p_tracking_id": tracking_id,
+            "p_status": payload.status,
+            "p_description": "Status updated to " + payload.status.replace("_", " "),
+            "p_location": payload.location,
+        },
+    ).execute()
+    parcel = rpc_parcel_data(result.data)
+    try:
+        deliver_status_updated(
+            db,
+            os.getenv("SAMPLE_OWNER_ID") or "20000000-0000-4000-8000-000000000001",
+            parcel,
+        )
+    except Exception:
+        logger.exception("Could not complete parcel status webhook dispatch.")
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/api-keys")
+def admin_create_api_key(
+    request: Request,
+    csrf_token: str = Form(...),
+    name: str = Form(...),
+    scopes: str = Form(...),
+    db: Client = Depends(get_supabase_client),
+) -> RedirectResponse:
+    session = require_admin(request)
+    verify_csrf(request, session, csrf_token)
+    selected_scopes = [scope.strip() for scope in scopes.split(",") if scope.strip() in {"read", "write"}]
+    if not selected_scopes:
+        raise api_error(400, "validation_error", "Select at least one valid API key scope.")
+    api_key = secrets.token_urlsafe(32)
+    key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    result = (
+        db.table("api_keys")
+        .insert(
+            {
+                "owner_id": os.getenv("SAMPLE_OWNER_ID") or "20000000-0000-4000-8000-000000000001",
+                "name": name,
+                "key_hash": key_hash,
+                "key_prefix": api_key[:8],
+                "scopes": selected_scopes,
+                "revoked_at": None,
+            }
+        )
+        .execute()
+    )
+    if not result.data:
+        raise api_error(500, "database_error", "The API key could not be created.")
+    response = templates.TemplateResponse(
+        request,
+        "api_key_created.html",
+        {"csrf_token": session["csrf"], "api_key": api_key, "name": name},
+    )
+    return response
+
+
+@app.post("/admin/api-keys/{key_id}/revoke")
+def admin_revoke_api_key(
+    request: Request,
+    key_id: UUID,
+    csrf_token: str = Form(...),
+    db: Client = Depends(get_supabase_client),
+) -> RedirectResponse:
+    session = require_admin(request)
+    verify_csrf(request, session, csrf_token)
+    (
+        db.table("api_keys")
+        .update({"revoked_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", str(key_id))
+        .execute()
+    )
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.get("/docs-guide", response_class=HTMLResponse)
+def docs_guide(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "docs_guide.html", {})
+
+
 @app.post("/api/v1/parcels", status_code=201)
 def create_parcel(
     payload: ParcelCreate,
@@ -382,6 +777,10 @@ def update_parcel_status(
         },
     ).execute()
     parcel = rpc_parcel_data(result.data)
+    try:
+        deliver_status_updated(db, principal.owner_id, parcel)
+    except Exception:
+        logger.exception("Could not complete parcel status webhook dispatch.")
     return {"success": True, "data": parcel_data(parcel)}
 
 
@@ -470,3 +869,72 @@ def ask_parcel_assistant(
             "The assistant service returned an empty response.",
         )
     return {"success": True, "data": {"answer": answer}}
+
+
+@app.post("/api/v1/webhooks", status_code=201)
+def create_webhook(
+    payload: WebhookCreate,
+    principal: APIKeyPrincipal = Depends(require_scope("write")),
+    db: Client = Depends(get_supabase_client),
+) -> dict:
+    webhook_secret = secrets.token_urlsafe(32)
+    result = (
+        db.table("webhooks")
+        .insert(
+            {
+                "owner_id": principal.owner_id,
+                "url": payload.url,
+                "secret": webhook_secret,
+            }
+        )
+        .execute()
+    )
+    if not result.data:
+        raise api_error(500, "database_error", "The webhook could not be created.")
+
+    webhook = result.data[0]
+    return {
+        "success": True,
+        "data": {
+            "id": webhook["id"],
+            "url": webhook["url"],
+            "events": webhook.get("events") or [],
+            "active": webhook.get("active", True),
+            "created_at": webhook.get("created_at"),
+            "secret": webhook_secret,
+        },
+    }
+
+
+@app.get("/api/v1/webhooks")
+def list_webhooks(
+    principal: APIKeyPrincipal = Depends(require_scope("read")),
+    db: Client = Depends(get_supabase_client),
+) -> dict:
+    result = (
+        db.table("webhooks")
+        .select("id,url,events,active,created_at")
+        .eq("owner_id", principal.owner_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return {"success": True, "data": result.data or []}
+
+
+@app.delete("/api/v1/webhooks/{webhook_id}")
+def delete_webhook(
+    webhook_id: UUID,
+    principal: APIKeyPrincipal = Depends(require_scope("write")),
+    db: Client = Depends(get_supabase_client),
+) -> dict:
+    result = (
+        db.table("webhooks")
+        .delete()
+        .eq("id", str(webhook_id))
+        .eq("owner_id", principal.owner_id)
+        .select("id")
+        .execute()
+    )
+    if not result.data:
+        raise api_error(404, "webhook_not_found", "No webhook matches that ID.")
+    return {"success": True, "data": {"id": str(webhook_id), "deleted": True}}

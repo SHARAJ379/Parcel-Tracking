@@ -1,12 +1,15 @@
 import hashlib
+import hmac
 import json
 from types import SimpleNamespace
 
+import httpx
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from google.genai import errors as genai_errors
 
+import webhooks as webhook_service
 from app import (
     UNKNOWN_PARCEL_ANSWER,
     app,
@@ -34,6 +37,15 @@ class FakeTable:
     def update(self, values):
         self.operation = "update"
         self.values = values
+        return self
+
+    def insert(self, values):
+        self.operation = "insert"
+        self.values = values
+        return self
+
+    def delete(self):
+        self.operation = "delete"
         return self
 
     def eq(self, field, value):
@@ -69,11 +81,64 @@ class FakeTable:
                 return SimpleNamespace(data=[row])
             return SimpleNamespace(data=[])
 
+        if self.name == "api_keys" and self.operation == "insert":
+            record = {
+                **self.values,
+                "id": "50000000-0000-4000-8000-000000000001",
+                "created_at": "2026-11-26T10:00:00+00:00",
+                "last_used_at": None,
+            }
+            return SimpleNamespace(data=[record])
+
+        if self.name == "webhooks":
+            if self.operation == "insert":
+                record = {
+                    **self.values,
+                    "id": "40000000-0000-4000-8000-000000000001",
+                    "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+                    "active": True,
+                    "created_at": "2026-11-26T10:00:00+00:00",
+                }
+                self.database.webhooks.append(record)
+                return SimpleNamespace(data=[record])
+
+            if self.operation == "delete":
+                matches = [
+                    record
+                    for record in self.database.webhooks
+                    if all(record.get(key) == value for key, value in self.filters.items())
+                ]
+                self.database.webhooks = [
+                    record for record in self.database.webhooks if record not in matches
+                ]
+                return SimpleNamespace(data=[{"id": record["id"]} for record in matches])
+
+            matches = [
+                record
+                for record in self.database.webhooks
+                if all(record.get(key) == value for key, value in self.filters.items())
+            ]
+            if hasattr(self, "fields"):
+                selected_fields = self.fields.split(",")
+                matches = [
+                    {key: record.get(key) for key in selected_fields}
+                    for record in matches
+                ]
+            return SimpleNamespace(data=matches)
+
+        if self.name == "webhook_deliveries" and self.operation == "insert":
+            if self.database.delivery_log_error:
+                raise RuntimeError("Simulated delivery log failure.")
+            self.database.delivery_logs.append(self.values)
+            return SimpleNamespace(data=[self.values])
+
         if self.name == "parcels":
             tracking_id = self.filters.get("tracking_id")
             owner_id = self.filters.get("owner_id")
             self.database.last_parcel_filters = dict(self.filters)
             for parcel in (self.database.parcel, self.database.other_owner_parcel):
+                if owner_id is None and tracking_id == parcel["tracking_id"]:
+                    return SimpleNamespace(data=[parcel])
                 if (
                     tracking_id == parcel["tracking_id"]
                     and owner_id == parcel["owner_id"]
@@ -116,14 +181,12 @@ class FakeRPC:
                 ]
             )
         if self.name == "update_parcel_status_with_event":
-            return SimpleNamespace(
-                data=[
-                    {
-                        **self.database.parcel,
-                        "status": self.params["p_status"],
-                    }
-                ]
-            )
+            updated_parcel = {
+                **self.database.parcel,
+                "status": self.params["p_status"],
+            }
+            self.database.parcel = updated_parcel
+            return SimpleNamespace(data=[updated_parcel])
         raise AssertionError(f"Unexpected RPC: {self.name}")
 
 
@@ -131,6 +194,9 @@ class FakeDatabase:
     def __init__(self):
         self.rate_limit_allowed = True
         self.parcel_queries = []
+        self.webhooks = []
+        self.delivery_logs = []
+        self.delivery_log_error = False
         self.parcel = {
             "id": "sample-parcel-id",
             "owner_id": OWNER_ID,
@@ -183,6 +249,44 @@ class FakeGemini:
         self.models = FakeGeminiModels()
 
 
+class FakeWebhookResponse:
+    def __init__(self, status_code: int, text: str = "received"):
+        self.status_code = status_code
+        self.text = text
+
+
+class FakeWebhookHttpClient:
+    responses = []
+    instances = []
+
+    def __init__(self, *, timeout, follow_redirects, trust_env):
+        self.timeout = timeout
+        self.follow_redirects = follow_redirects
+        self.trust_env = trust_env
+        self.requests = []
+        self.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def post(self, url, *, content, headers, follow_redirects):
+        self.requests.append(
+            {
+                "url": url,
+                "content": content,
+                "headers": headers,
+                "follow_redirects": follow_redirects,
+            }
+        )
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
 @pytest.fixture
 def api_client():
     database = FakeDatabase()
@@ -191,6 +295,30 @@ def api_client():
     with TestClient(app) as client:
         yield client, database
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def public_webhook_dns(monkeypatch):
+    def resolve(hostname, port, type):
+        return [
+            (
+                2,
+                1,
+                6,
+                "",
+                ("93.184.216.34", port),
+            )
+        ]
+
+    monkeypatch.setattr(webhook_service.socket, "getaddrinfo", resolve)
+
+
+@pytest.fixture
+def fake_webhook_http(monkeypatch):
+    FakeWebhookHttpClient.responses = []
+    FakeWebhookHttpClient.instances = []
+    monkeypatch.setattr(webhook_service.httpx, "Client", FakeWebhookHttpClient)
+    return FakeWebhookHttpClient
 
 
 def test_health_check(api_client) -> None:
@@ -502,3 +630,305 @@ def test_assistant_rejects_empty_model_response(api_client, monkeypatch) -> None
 
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "assistant_empty_response"
+
+
+def test_webhook_url_validation_requires_public_https(monkeypatch) -> None:
+    def resolve_private(hostname, port, type):
+        return [(2, 1, 6, "", ("10.0.0.8", port))]
+
+    monkeypatch.setattr(webhook_service.socket, "getaddrinfo", resolve_private)
+
+    with pytest.raises(webhook_service.WebhookTargetError):
+        webhook_service.validate_webhook_url("http://webhook.example/hook")
+    with pytest.raises(webhook_service.WebhookTargetError):
+        webhook_service.validate_webhook_url("https://localhost/hook")
+    with pytest.raises(webhook_service.WebhookTargetError):
+        webhook_service.validate_webhook_url("https://service.localhost/hook")
+    with pytest.raises(webhook_service.WebhookTargetError):
+        webhook_service.validate_webhook_url("https://webhook.example/hook")
+
+
+def test_webhook_url_validation_accepts_public_https_host(public_webhook_dns) -> None:
+    url = "https://webhook.example/hook"
+
+    assert webhook_service.validate_webhook_url(url) == url
+
+
+def test_webhook_create_list_and_delete_are_owner_scoped(
+    api_client, public_webhook_dns
+) -> None:
+    client, database = api_client
+    created = client.post(
+        "/api/v1/webhooks",
+        headers={"x-api-key": WRITE_KEY},
+        json={"url": "https://webhook.example/hook"},
+    )
+    webhook_id = created.json()["data"]["id"]
+    database.webhooks.append(
+        {
+            "id": "40000000-0000-4000-8000-000000000002",
+            "owner_id": "30000000-0000-4000-8000-000000000001",
+            "url": "https://other.example/hook",
+            "secret": "not-for-this-owner",
+            "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+            "active": True,
+            "created_at": "2026-11-26T10:00:00+00:00",
+        }
+    )
+    listed = client.get("/api/v1/webhooks", headers={"x-api-key": READ_KEY})
+    after_foreign_delete = client.delete(
+        "/api/v1/webhooks/40000000-0000-4000-8000-000000000002",
+        headers={"x-api-key": WRITE_KEY},
+    )
+    deleted = client.delete(
+        f"/api/v1/webhooks/{webhook_id}",
+        headers={"x-api-key": WRITE_KEY},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["success"] is True
+    assert created.json()["data"]["secret"]
+    assert created.json()["data"]["events"] == [webhook_service.WEBHOOK_EVENT_TYPE]
+    assert listed.status_code == 200
+    assert len(listed.json()["data"]) == 1
+    assert "secret" not in listed.json()["data"][0]
+    assert "not-for-this-owner" not in listed.text
+    assert after_foreign_delete.status_code == 404
+    assert deleted.status_code == 200
+
+
+def test_webhook_registration_rejects_private_and_http_urls(
+    api_client, monkeypatch
+) -> None:
+    client, _ = api_client
+    monkeypatch.setattr(
+        webhook_service.socket,
+        "getaddrinfo",
+        lambda hostname, port, type: [(2, 1, 6, "", ("127.0.0.1", port))],
+    )
+    headers = {"x-api-key": WRITE_KEY}
+
+    private = client.post(
+        "/api/v1/webhooks",
+        headers=headers,
+        json={"url": "https://hook.example/"},
+    )
+    non_https = client.post(
+        "/api/v1/webhooks",
+        headers=headers,
+        json={"url": "http://93.184.216.34/hook"},
+    )
+
+    assert private.status_code == 400
+    assert non_https.status_code == 400
+    assert private.json()["error"]["code"] == "validation_error"
+
+
+def test_status_update_delivers_signed_event_and_logs_success(
+    api_client, public_webhook_dns, fake_webhook_http
+) -> None:
+    client, database = api_client
+    secret = "webhook-test-secret"
+    database.webhooks.append(
+        {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "owner_id": OWNER_ID,
+            "url": "https://webhook.example/hook",
+            "secret": secret,
+            "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+            "active": True,
+        }
+    )
+    fake_webhook_http.responses = [FakeWebhookResponse(204, "accepted")]
+
+    response = client.patch(
+        "/api/v1/parcels/DEMO-PARCEL-001/status",
+        headers={"x-api-key": WRITE_KEY},
+        json={"status": "delayed", "location": "Sorting facility"},
+    )
+
+    request = fake_webhook_http.instances[0].requests[0]
+    expected_signature = "sha256=" + hmac.new(
+        secret.encode("utf-8"),
+        request["content"],
+        hashlib.sha256,
+    ).hexdigest()
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "delayed"
+    assert request["headers"]["X-Signature"] == expected_signature
+    assert request["headers"]["X-Event-Type"] == webhook_service.WEBHOOK_EVENT_TYPE
+    assert fake_webhook_http.instances[0].follow_redirects is False
+    assert fake_webhook_http.instances[0].trust_env is False
+    assert fake_webhook_http.instances[0].timeout.read <= 2.0
+    assert len(database.delivery_logs) == 1
+    assert database.delivery_logs[0]["attempt_number"] == 1
+    assert database.delivery_logs[0]["response_status"] == 204
+    assert database.delivery_logs[0]["error"] is None
+
+
+def test_failed_webhook_retries_three_times_without_failing_status_update(
+    api_client, public_webhook_dns, fake_webhook_http
+) -> None:
+    client, database = api_client
+    database.webhooks.append(
+        {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "owner_id": OWNER_ID,
+            "url": "https://webhook.example/hook",
+            "secret": "webhook-test-secret",
+            "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+            "active": True,
+        }
+    )
+    fake_webhook_http.responses = [
+        FakeWebhookResponse(503, "unavailable"),
+        FakeWebhookResponse(302, "redirect"),
+        FakeWebhookResponse(500, "still unavailable"),
+    ]
+
+    response = client.patch(
+        "/api/v1/parcels/DEMO-PARCEL-001/status",
+        headers={"x-api-key": WRITE_KEY},
+        json={"status": "in_transit"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert len(fake_webhook_http.instances[0].requests) == 3
+    assert [entry["attempt_number"] for entry in database.delivery_logs] == [1, 2, 3]
+    assert [entry["response_status"] for entry in database.delivery_logs] == [
+        503,
+        302,
+        500,
+    ]
+    assert all(entry["error"] for entry in database.delivery_logs)
+
+
+def test_webhook_timeout_is_logged_and_retried(
+    api_client, public_webhook_dns, fake_webhook_http
+) -> None:
+    client, database = api_client
+    database.webhooks.append(
+        {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "owner_id": OWNER_ID,
+            "url": "https://webhook.example/hook",
+            "secret": "webhook-test-secret",
+            "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+            "active": True,
+        }
+    )
+    fake_webhook_http.responses = [
+        httpx.ReadTimeout("timed out"),
+        FakeWebhookResponse(204, "accepted"),
+    ]
+
+    response = client.patch(
+        "/api/v1/parcels/DEMO-PARCEL-001/status",
+        headers={"x-api-key": WRITE_KEY},
+        json={"status": "delayed"},
+    )
+
+    assert response.status_code == 200
+    assert [entry["attempt_number"] for entry in database.delivery_logs] == [1, 2]
+    assert database.delivery_logs[0]["response_status"] is None
+    assert "ReadTimeout" in database.delivery_logs[0]["error"]
+    assert database.delivery_logs[1]["response_status"] == 204
+    assert database.delivery_logs[1]["error"] is None
+
+
+def test_webhook_delivery_log_failure_does_not_fail_status_update(
+    api_client, public_webhook_dns, fake_webhook_http
+) -> None:
+    client, database = api_client
+    database.delivery_log_error = True
+    database.webhooks.append(
+        {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "owner_id": OWNER_ID,
+            "url": "https://webhook.example/hook",
+            "secret": "webhook-test-secret",
+            "events": [webhook_service.WEBHOOK_EVENT_TYPE],
+            "active": True,
+        }
+    )
+    fake_webhook_http.responses = [FakeWebhookResponse(204, "accepted")]
+
+    response = client.patch(
+        "/api/v1/parcels/DEMO-PARCEL-001/status",
+        headers={"x-api-key": WRITE_KEY},
+        json={"status": "delayed"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
+
+def test_webhook_endpoints_require_correct_scopes(api_client, public_webhook_dns) -> None:
+    client, _ = api_client
+    create = client.post(
+        "/api/v1/webhooks",
+        headers={"x-api-key": READ_KEY},
+        json={"url": "https://webhook.example/hook"},
+    )
+    delete = client.delete(
+        "/api/v1/webhooks/40000000-0000-4000-8000-000000000001",
+        headers={"x-api-key": READ_KEY},
+    )
+
+    assert create.status_code == 403
+    assert delete.status_code == 403
+
+
+def test_public_tracking_page_looks_up_parcel(api_client) -> None:
+    client, _ = api_client
+    response = client.get("/?tracking_id=DEMO-PARCEL-001")
+
+    assert response.status_code == 200
+    assert "DEMO-PARCEL-001" in response.text
+    assert "in_transit" in response.text
+
+
+def test_admin_login_and_dashboard_require_valid_session(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+
+    login = client.post(
+        "/admin/login",
+        data={"password": "test-admin-password"},
+        follow_redirects=False,
+    )
+    dashboard = client.get("/admin", follow_redirects=False)
+
+    assert login.status_code == 303
+    assert login.cookies.get("parcel_admin_session")
+    assert dashboard.status_code == 200
+    assert "Admin dashboard" in dashboard.text
+
+
+def test_admin_post_requires_csrf_token(api_client, monkeypatch) -> None:
+    client, _ = api_client
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    monkeypatch.setenv("SESSION_SECRET", "test-session-secret")
+    client.post(
+        "/admin/login",
+        data={"password": "test-admin-password"},
+        follow_redirects=False,
+    )
+
+    response = client.post(
+        "/admin/api-keys",
+        data={"name": "Test key", "scopes": "read", "csrf_token": "wrong"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "csrf_validation_error"
+
+
+def test_docs_guide_is_available(api_client) -> None:
+    client, _ = api_client
+    response = client.get("/docs-guide")
+
+    assert response.status_code == 200
+    assert "Webhook" in response.text

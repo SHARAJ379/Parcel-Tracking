@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}API guide{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>API guide</h1>
+  <p>Send API keys in the <code>x-api-key</code> header. The public page does not expose API keys.</p>
+  <p>FastAPI documentation remains available at <a href="/docs">/docs</a>.</p>
+</section>
+<section class="card"><h2>Create parcel</h2><pre>POST /api/v1/parcels
+x-api-key: &lt;write-key&gt;
+{"tracking_id":"TEST-001","destination":"London","eta":"2026-12-01T10:00:00Z"}</pre></section>
+<section class="card"><h2>Update status</h2><pre>PATCH /api/v1/parcels/TEST-001/status
+x-api-key: &lt;write-key&gt;
+{"status":"in_transit","location":"Sorting facility"}</pre></section>
+<section class="card"><h2>Assistant</h2><pre>POST /api/v1/assistant
+x-api-key: &lt;read-key&gt;
+{"tracking_id":"DEMO-PARCEL-001","question":"Where is my parcel?"}</pre></section>
+<section class="card"><h2>Webhook</h2><pre>POST /api/v1/webhooks
+x-api-key: &lt;write-key&gt;
+{"url":"https://example.com/webhook"}</pre><p>Verify the exact request body with HMAC-SHA256 using <code>X-Signature: sha256=&lt;hex-digest&gt;</code>.</p></section>
+<section class="card"><h2>Errors</h2><p>Responses use <code>{"success":false,"error":{"code":...,"message":...}}</code>. Status codes include 400, 401, 403, 404, 409, 429, 500, 502 and 504.</p></section>
+{% endblock %}

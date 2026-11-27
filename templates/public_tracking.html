@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Track a parcel{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Track a parcel</h1>
+  <form method="get" action="/">
+    <label for="tracking_id">Tracking ID</label>
+    <input id="tracking_id" name="tracking_id" value="{{ tracking_id }}" maxlength="80" required>
+    <button type="submit">Track parcel</button>
+  </form>
+</section>
+
+{% if not_found %}
+<section class="card warning"><h2>Parcel not found</h2><p>No parcel matches that tracking ID.</p></section>
+{% elif parcel %}
+<section class="card">
+  <h2>{{ parcel.tracking_id }}</h2>
+  <dl>
+    <dt>Status</dt><dd>{{ parcel.status }}</dd>
+    <dt>Destination</dt><dd>{{ parcel.destination }}</dd>
+    <dt>ETA</dt><dd>{{ parcel.eta or "Not provided" }}</dd>
+  </dl>
+  <h3>Timeline</h3>
+  {% if timeline %}
+  <ol class="timeline">
+    {% for event in timeline %}
+    <li><strong>{{ event.status }}</strong><span>{{ event.occurred_at }}</span>{% if event.location %}<span>{{ event.location }}</span>{% endif %}{% if event.description %}<p>{{ event.description }}</p>{% endif %}</li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p>No timeline events.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

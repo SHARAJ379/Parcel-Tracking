@@ -7,8 +7,9 @@ to real courier services.
 
 Development is being completed in phases. Phase 1 added the project scaffold;
 Phase 2 adds API-key-authenticated parcel endpoints and their Supabase
-migration. Phase 3 adds the Gemini assistant; webhooks, public/admin pages, and
-deployment configuration will be added in later phases.
+migration. Phase 3 adds the Gemini assistant. Phase 4 adds signed webhooks;
+Phase 5 adds public tracking and the admin interface; deployment configuration
+will be added in the final phase.
 
 ## Requirements
 
@@ -170,6 +171,89 @@ python -m uvicorn app:app --reload
 The live script checks missing-key, unknown-parcel and question-length errors,
 then asks Gemini about the seeded `DEMO-PARCEL-001` parcel. It reads the
 existing test key from `.env.local` without printing it.
+
+## Phase 4: Webhooks
+
+The webhook API uses write scope for registration/deletion and read scope for
+listing:
+
+- `POST /api/v1/webhooks` with `{"url":"https://..."}` registers an endpoint.
+  The response includes a signing secret once.
+- `GET /api/v1/webhooks` lists only the authenticated owner's endpoints and
+  never returns their secrets.
+- `DELETE /api/v1/webhooks/{id}` deletes only an endpoint owned by the
+  authenticated API key's owner.
+
+Registration accepts only HTTPS URLs that resolve exclusively to public IP
+addresses; localhost, private/link-local/reserved addresses, credentials in
+URLs, and URL fragments are rejected. Delivery rechecks the destination, uses
+HTTPX with redirects disabled and a two-second timeout, and logs each attempt
+(up to three). Status updates wait for delivery, but a delivery or logging
+failure does not fail the parcel status response.
+
+The registration response includes a randomly generated signing secret once.
+Store it privately; list responses never include it. Requests use the exact
+UTF-8 JSON body sent over the wire and the header
+`X-Signature: sha256=<lowercase-hex-HMAC-SHA256>`.
+
+### Test with webhook.site
+
+1. Open [webhook.site](https://webhook.site/) and copy the unique HTTPS URL it
+   gives you.
+2. With the app running locally and Phase 2 test keys provisioned, run these
+   commands in PowerShell. Replace the webhook URL placeholder with your own
+   webhook.site URL. Key values and the one-time webhook secret are kept in
+   variables and are not printed.
+
+```powershell
+$readKey = & .\.venv\Scripts\python.exe -c "from dotenv import dotenv_values; print(dotenv_values('.env.local').get('PARCEL_TEST_READ_API_KEY', ''))"
+$writeKey = & .\.venv\Scripts\python.exe -c "from dotenv import dotenv_values; print(dotenv_values('.env.local').get('PARCEL_TEST_WRITE_API_KEY', ''))"
+$webhookSiteUrl = 'https://webhook.site/REPLACE-WITH-YOUR-UNIQUE-ID'
+$baseUrl = 'http://127.0.0.1:8000'
+
+$registration = Invoke-RestMethod -Uri "$baseUrl/api/v1/webhooks" -Method POST -Headers @{ 'x-api-key' = $writeKey } -ContentType 'application/json' -Body (@{ url = $webhookSiteUrl } | ConvertTo-Json -Compress)
+$webhookId = $registration.data.id
+$webhookSecret = $registration.data.secret
+
+$trackingId = 'WEBHOOK-TEST-' + [guid]::NewGuid().ToString('N')
+$null = Invoke-RestMethod -Uri "$baseUrl/api/v1/parcels" -Method POST -Headers @{ 'x-api-key' = $writeKey } -ContentType 'application/json' -Body (@{ tracking_id = $trackingId; destination = 'Webhook test' } | ConvertTo-Json -Compress)
+$null = Invoke-RestMethod -Uri "$baseUrl/api/v1/parcels/$trackingId/status" -Method PATCH -Headers @{ 'x-api-key' = $writeKey } -ContentType 'application/json' -Body (@{ status = 'picked_up'; location = 'Test facility' } | ConvertTo-Json -Compress)
+```
+
+3. In webhook.site, open the received request and copy its **raw request body**
+   and `X-Signature` header. Verify them in the same PowerShell window:
+
+```powershell
+$rawBody = Read-Host 'Paste the exact raw request body'
+$receivedSignature = Read-Host 'Paste the X-Signature value'
+$hmac = [System.Security.Cryptography.HMACSHA256]::new([Text.Encoding]::UTF8.GetBytes($webhookSecret))
+$digest = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($rawBody))
+$expectedSignature = 'sha256=' + [BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
+$hmac.Dispose()
+if ($expectedSignature -cne $receivedSignature) { throw 'Webhook signature did not match.' }
+Write-Output 'Webhook signature verified.'
+
+$null = Invoke-RestMethod -Uri "$baseUrl/api/v1/webhooks/$webhookId" -Method DELETE -Headers @{ 'x-api-key' = $writeKey }
+Remove-Variable readKey, writeKey, webhookSecret
+```
+
+## Phase 5: Public and admin interface
+
+Set `ADMIN_PASSWORD` and `SESSION_SECRET` in ignored `.env.local`. The public
+tracking page is at `/`, and the admin login is at `/admin/login`.
+
+- `/` accepts a `tracking_id` query parameter and displays status, ETA and
+  timeline without using an API key.
+- `/admin/login` signs in with `ADMIN_PASSWORD` and uses a signed, HttpOnly,
+  SameSite=Lax session cookie.
+- `/admin` provides parcel creation/status updates, API-key creation/revocation,
+  webhook endpoint status, and recent delivery logs.
+- Admin POST forms require a hidden CSRF token tied to the signed session.
+- `/docs-guide` provides a small project-specific API and webhook guide; FastAPI
+  still provides interactive `/docs`.
+
+Use a separate browser session or clear cookies before testing admin login.
+API keys created in the admin page are displayed once and stored only by hash.
 
 ## Deployment
 

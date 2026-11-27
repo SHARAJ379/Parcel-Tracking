@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Admin dashboard{% endblock %}
+{% block content %}
+<section class="toolbar">
+  <h1>Admin dashboard</h1>
+  <form method="post" action="/admin/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary" type="submit">Log out</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Create parcel</h2>
+  <form method="post" action="/admin/parcels" class="grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Tracking ID<input name="tracking_id" minlength="3" maxlength="80" required></label>
+    <label>Destination<input name="destination" maxlength="200" required></label>
+    <label>ETA<input name="eta" type="datetime-local"></label>
+    <button type="submit">Create</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Parcels</h2>
+  {% for parcel in parcels %}
+  <article class="row">
+    <strong>{{ parcel.tracking_id }}</strong>
+    <span>{{ parcel.status }}</span>
+    <form method="post" action="/admin/parcels/{{ parcel.tracking_id }}/status" class="grid inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <select name="status" aria-label="New status">
+        {% for status in ["created","picked_up","in_transit","out_for_delivery","delivered","delayed","failed_delivery"] %}
+        <option value="{{ status }}">{{ status }}</option>
+        {% endfor %}
+      </select>
+      <input name="location" maxlength="200" placeholder="Location">
+      <button type="submit">Update</button>
+    </form>
+  </article>
+  {% else %}<p>No parcels.</p>{% endfor %}
+</section>
+
+<section class="card">
+  <h2>Create API key</h2>
+  <form method="post" action="/admin/api-keys" class="grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Name<input name="name" maxlength="100" required></label>
+    <label>Scopes<select name="scopes"><option value="read">read</option><option value="write">write</option><option value="read,write">read, write</option></select></label>
+    <button type="submit">Create key</button>
+  </form>
+  {% for key in api_keys %}
+  <article class="row">
+    <strong>{{ key.name }}</strong><span>{{ key.key_prefix }}...</span>
+    <span>{{ key.scopes|join(", ") }}</span>
+    {% if not key.revoked_at %}
+    <form method="post" action="/admin/api-keys/{{ key.id }}/revoke">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="danger" type="submit">Revoke</button>
+    </form>
+    {% else %}<span>Revoked</span>{% endif %}
+  </article>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h2>Webhook endpoints</h2>
+  {% for webhook in webhooks %}
+  <p><strong>{{ webhook.url }}</strong> - {{ "active" if webhook.active else "inactive" }}</p>
+  {% else %}<p>No webhook endpoints.</p>{% endfor %}
+</section>
+
+<section class="card">
+  <h2>Recent webhook deliveries</h2>
+  {% for delivery in deliveries %}
+  <article class="row">
+    <span>{{ delivery.attempted_at }}</span>
+    <span>attempt {{ delivery.attempt_number }}</span>
+    <span>HTTP {{ delivery.response_status or "error" }}</span>
+    <span>{{ delivery.error or "success" }}</span>
+  </article>
+  {% else %}<p>No delivery attempts.</p>{% endfor %}
+</section>
+{% endblock %}
