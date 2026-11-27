@@ -1222,3 +1222,20 @@ def test_admin_eta_without_timezone_is_read_as_ist() -> None:
     assert format_ist_datetime(eta) == "01 Dec 2026, 10:00 AM IST"
     assert parse_admin_eta("2026-12-01T10:00:00+00:00").utcoffset().total_seconds() == 0
     assert parse_admin_eta("") is None
+
+
+def test_pyproject_and_requirements_list_the_same_dependencies() -> None:
+    # Vercel installs from pyproject.toml; local setup uses requirements.txt.
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    requirements = [
+        line.strip()
+        for line in (root / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+    assert sorted(pyproject["project"]["dependencies"]) == sorted(requirements)
+    assert pyproject["tool"]["vercel"]["entrypoint"] == "app:app"

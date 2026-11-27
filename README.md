@@ -287,6 +287,11 @@ API keys created in the admin page are displayed once and stored only by hash.
 
 ## Deployment
 
+On Vercel, choose the **FastAPI** framework preset. `pyproject.toml` sets
+`[tool.vercel] entrypoint = "app:app"` so Vercel loads the app directly (its
+automatic detector could not read `app.py`), and lists the same pinned
+dependencies as `requirements.txt`; a test keeps the two lists identical.
+
 The application entrypoint is `app.py`. Configure the environment variables
 listed in `.env.example` in the hosting provider's project settings. Keep the
 `templates/` and `static/` directories alongside the application entrypoint.
