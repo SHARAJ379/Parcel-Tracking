@@ -33,6 +33,10 @@ marketing filler.
 - Keep code simple and explain it; the user must defend it in a review.
 - Do not reset or reseed the database. Give the user any SQL to run themselves.
 - Do not push to any remote or deploy without asking.
+- Do not create, prepare or push any pull request, and do not push to any
+  remote, unless the user asks. The user will say when all 3 faculty reviews
+  are done; this replaces the earlier plan to prepare a PR for
+  kamathn-blr/GenAI-CIAP-2025Batch after faculty approval.
 - Stop any server you start.
 
 ## Project layout

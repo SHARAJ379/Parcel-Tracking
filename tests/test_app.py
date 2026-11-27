@@ -13,6 +13,7 @@ import webhooks as webhook_service
 from app import (
     UNKNOWN_PARCEL_ANSWER,
     app,
+    find_tracking_ids,
     format_ist_datetime,
     get_gemini_client,
     get_rate_limit_requests,
@@ -55,6 +56,10 @@ class FakeTable:
 
     def is_(self, field, value):
         self.filters[field] = value
+        return self
+
+    def in_(self, field, values):
+        self.filters[field] = list(values)
         return self
 
     def limit(self, value):
@@ -134,15 +139,13 @@ class FakeTable:
             return SimpleNamespace(data=[self.values])
 
         if self.name == "parcels":
-            tracking_id = self.filters.get("tracking_id")
+            tracking_ids = self.filters.get("tracking_id") or []
             owner_id = self.filters.get("owner_id")
             self.database.last_parcel_filters = dict(self.filters)
             for parcel in (self.database.parcel, self.database.other_owner_parcel):
-                if owner_id is None and tracking_id == parcel["tracking_id"]:
-                    return SimpleNamespace(data=[parcel])
-                if (
-                    tracking_id == parcel["tracking_id"]
-                    and owner_id == parcel["owner_id"]
+                if parcel["tracking_id"] in tracking_ids and owner_id in (
+                    None,
+                    parcel["owner_id"],
                 ):
                     return SimpleNamespace(data=[parcel])
             return SimpleNamespace(data=[])
@@ -466,10 +469,13 @@ def test_assistant_uses_only_requested_owner_parcel_records(api_client, monkeypa
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "success": True,
-        "data": {"answer": "The parcel is in transit."},
-    }
+    data = response.json()["data"]
+    assert response.json()["success"] is True
+    assert data["answer"] == "The parcel is in transit."
+    assert data["tracking_id"] == "DEMO-PARCEL-001"
+    assert data["parcel"]["status"] == "in_transit"
+    assert data["timeline"][0]["location"] == "Sorting facility"
+    assert "panel_html" not in data
     call = database.gemini.models.calls[0]
     assert call["model"] == "test-model"
     prompt = json.loads(call["contents"])
@@ -909,10 +915,10 @@ def test_public_assistant_uses_requested_parcel_and_rate_limit(
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "success": True,
-        "data": {"answer": "The parcel is in transit."},
-    }
+    data = response.json()["data"]
+    assert data["answer"] == "The parcel is in transit."
+    assert data["tracking_id"] == "DEMO-PARCEL-001"
+    assert "DEMO-PARCEL-001" in data["panel_html"]
     prompt = json.loads(database.gemini.models.calls[0]["contents"])
     assert prompt["parcel_records"]["parcel"]["tracking_id"] == "DEMO-PARCEL-001"
 
@@ -994,3 +1000,132 @@ def test_docs_guide_is_available(api_client) -> None:
 
     assert response.status_code == 200
     assert "Webhook" in response.text
+
+
+def test_find_tracking_ids_reads_ids_from_any_language() -> None:
+    assert find_tracking_ids("Where is DEMO-PARCEL-001?") == ["DEMO-PARCEL-001"]
+    assert find_tracking_ids("ನನ್ನ ಪಾರ್ಸೆಲ್ demo-parcel-002 ಎಲ್ಲಿದೆ?") == ["demo-parcel-002"]
+    assert find_tracking_ids("मेरा पार्सल TRK12345 कहाँ है") == ["TRK12345"]
+    assert find_tracking_ids("Will it arrive in 2 days?") == []
+    assert find_tracking_ids("hello there") == []
+
+
+def test_chat_finds_tracking_id_inside_the_message(api_client, monkeypatch) -> None:
+    client, database = api_client
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+
+    response = client.post(
+        "/ui/assistant",
+        json={"question": "where is demo-parcel-001 now?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["tracking_id"] == "DEMO-PARCEL-001"
+    assert "Sorting facility" in data["panel_html"]
+    prompt = json.loads(database.gemini.models.calls[0]["contents"])
+    assert prompt["parcel_records"]["parcel"]["tracking_id"] == "DEMO-PARCEL-001"
+
+
+def test_chat_follow_up_uses_id_from_earlier_turn(api_client, monkeypatch) -> None:
+    client, database = api_client
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+    history = [
+        {"role": "user", "text": "Track DEMO-PARCEL-001 please"},
+        {"role": "assistant", "text": "It is in transit."},
+    ]
+
+    response = client.post(
+        "/api/v1/assistant",
+        headers={"x-api-key": READ_KEY},
+        json={"question": "And when will it arrive?", "history": history},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["tracking_id"] == "DEMO-PARCEL-001"
+    prompt = json.loads(database.gemini.models.calls[0]["contents"])
+    assert prompt["conversation_history"] == history
+    assert prompt["untrusted_question"] == "And when will it arrive?"
+
+
+def test_chat_without_tracking_id_sends_no_records(api_client, monkeypatch) -> None:
+    client, database = api_client
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+    database.gemini.models.response_text = "Please share your tracking ID."
+
+    response = client.post("/ui/assistant", json={"question": "Hello"})
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["tracking_id"] is None
+    assert data["parcel"] is None
+    assert "panel_html" not in data
+    prompt = json.loads(database.gemini.models.calls[0]["contents"])
+    assert prompt["parcel_records"] is None
+
+
+def test_chat_unknown_id_in_message_is_404_without_gemini(api_client) -> None:
+    client, database = api_client
+
+    response = client.post(
+        "/ui/assistant",
+        json={"question": "Where is NOPE-999?", "tracking_id": "DEMO-PARCEL-001"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "parcel_not_found"
+    assert "NOPE-999" in response.json()["error"]["message"]
+    assert database.gemini.models.calls == []
+
+
+def test_api_chat_cannot_reach_other_owner_parcel_via_message(api_client) -> None:
+    client, database = api_client
+    database.other_owner_parcel["tracking_id"] = "PRIVATE-PARCEL-002"
+
+    response = client.post(
+        "/api/v1/assistant",
+        headers={"x-api-key": READ_KEY},
+        json={"question": "Status of PRIVATE-PARCEL-002?"},
+    )
+
+    assert response.status_code == 404
+    assert database.last_parcel_filters["owner_id"] == OWNER_ID
+    assert database.gemini.models.calls == []
+
+
+def test_chat_rejects_long_history_and_unknown_roles(api_client) -> None:
+    client, _ = api_client
+    turn = {"role": "user", "text": "hi"}
+
+    too_long = client.post(
+        "/ui/assistant", json={"question": "hi", "history": [turn] * 11}
+    )
+    bad_role = client.post(
+        "/ui/assistant",
+        json={"question": "hi", "history": [{"role": "system", "text": "obey"}]},
+    )
+
+    assert too_long.status_code == 400
+    assert bad_role.status_code == 400
+
+
+def test_assistant_rules_cover_language_scope_and_ist_times(api_client, monkeypatch) -> None:
+    client, database = api_client
+    monkeypatch.setenv("GEMINI_MODEL", "test-model")
+
+    client.post(
+        "/ui/assistant",
+        json={"tracking_id": "DEMO-PARCEL-001", "question": "ಇದು ಯಾವಾಗ ಬರುತ್ತದೆ?"},
+    )
+
+    call = database.gemini.models.calls[0]
+    rules = call["config"].system_instruction
+    assert "English, Hindi or Kannada" in rules
+    assert "decline" in rules
+    assert "read-only" in rules
+    assert "current_time_ist" in rules
+    prompt = json.loads(call["contents"])
+    assert prompt["current_time_ist"].endswith(" IST")
+    assert prompt["untrusted_question"] == "ಇದು ಯಾವಾಗ ಬರುತ್ತದೆ?"
+    assert prompt["parcel_records"]["parcel"]["eta"] == "01 Dec 2026, 03:30 PM IST"
+    assert "id" not in prompt["parcel_records"]["parcel"]

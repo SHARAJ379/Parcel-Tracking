@@ -1,0 +1,32 @@
+{# Parcel status and timeline. Rendered on page load and returned by /ui/assistant. #}
+<section class="parcel-card" aria-labelledby="parcel-title">
+  <div class="parcel-card-head">
+    <h2 id="parcel-title" class="tracking-code">{{ parcel.tracking_id }}</h2>
+    <span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|title }}</span>
+  </div>
+  <dl class="parcel-facts">
+    <div><dt>Destination</dt><dd>{{ parcel.destination }}</dd></div>
+    <div><dt>Estimated arrival</dt><dd>{{ parcel.eta|ist_datetime }}</dd></div>
+    <div><dt>Last update</dt><dd>{{ parcel.updated_at|ist_datetime }}</dd></div>
+  </dl>
+  <h3>Delivery timeline <span class="section-note">IST</span></h3>
+  {% if timeline %}
+  <ol class="timeline">
+    {% for event in timeline|reverse %}
+    <li class="timeline-item {% if loop.first %}timeline-current{% endif %}">
+      <span class="timeline-dot" aria-hidden="true"></span>
+      <div class="timeline-content">
+        <div class="timeline-topline">
+          <strong>{{ event.status|replace('_', ' ')|title }}</strong>
+          <time>{{ event.occurred_at|ist_datetime }}</time>
+        </div>
+        {% if event.location %}<p class="timeline-location">{{ event.location }}</p>{% endif %}
+        {% if event.description %}<p>{{ event.description }}</p>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty-state">No delivery updates have been recorded.</p>
+  {% endif %}
+</section>

@@ -48,11 +48,19 @@
     </section>
     <section class="docs-section" id="assistant">
       <h2>Parcel assistant <span class="method-label">POST · 200</span></h2>
-      <p>Ask a question based only on the requested parcel’s records. Questions are limited to 1,000 characters.</p>
+      <p>Answers questions in English, Hindi or Kannada using only your parcel’s records, and declines unrelated requests. The tracking ID can be sent in <code>tracking_id</code> or written inside <code>question</code>. For follow-up questions, send up to 10 earlier turns in <code>history</code> (oldest first, roles <code>user</code> or <code>assistant</code>). Each text is limited to 1,000 characters. The assistant is read-only.</p>
       <div class="code-block"><button type="button" class="copy-code" data-copy-code>Copy</button><pre><code>curl -X POST https://your-app.example/api/v1/assistant \
   -H "x-api-key: YOUR_READ_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"tracking_id":"DEMO-PARCEL-001","question":"What is the latest update?"}'</code></pre></div>
+  -d '{"question":"And when will it arrive?",
+       "history":[{"role":"user","text":"Where is DEMO-PARCEL-001?"},
+                  {"role":"assistant","text":"It is in transit at the sorting facility."}]}'</code></pre></div>
+      <p>The response contains the answer and the records it was based on. <code>tracking_id</code> and <code>parcel</code> are <code>null</code> when no tracking ID was given; an unknown ID returns <code>404</code>.</p>
+      <div class="code-block"><button type="button" class="copy-code" data-copy-code>Copy</button><pre><code>{"success":true,"data":{
+  "answer":"It is expected on 01 Dec 2026, 03:30 PM IST.",
+  "tracking_id":"DEMO-PARCEL-001",
+  "parcel":{"id":"…","tracking_id":"DEMO-PARCEL-001","status":"in_transit","eta":"2026-12-01T10:00:00+00:00", …},
+  "timeline":[{"status":"in_transit","location":"Sorting facility","occurred_at":"…","description":"…"}]}}</code></pre></div>
     </section>
     <section class="docs-section" id="webhooks">
       <h2>Webhooks</h2>

@@ -105,15 +105,30 @@ function selectTab(selectedTab) {
   });
 }
 
+// Chat: the browser keeps the conversation and sends the last few turns with
+// each question, so the server stays stateless.
+const MAX_HISTORY_TURNS = 10;
+
 document.querySelectorAll("[data-assistant-form]").forEach((form) => {
   const log = document.querySelector("[data-chat-log]");
   const status = document.querySelector("[data-assistant-status]");
+  const panel = document.querySelector("[data-parcel-panel]");
   const input = form.querySelector("textarea[name='question']");
   const button = form.querySelector("button[type='submit']");
+  const history = [];
+
+  // Enter sends; Shift+Enter adds a new line.
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const question = input.value.trim();
-    if (!question || !log || !button) return;
+    if (!question || !log || !button || button.disabled) return;
     status.textContent = "";
     appendMessage(log, question, "chat-user");
     input.value = "";
@@ -122,25 +137,39 @@ document.querySelectorAll("[data-assistant-form]").forEach((form) => {
     const loading = button.querySelector(".button-loading");
     if (label) label.hidden = true;
     if (loading) loading.hidden = false;
-    const pending = appendMessage(log, "Thinking…", "chat-pending");
+    const pending = appendMessage(log, "Checking tracking records…", "chat-pending");
     try {
       const response = await fetch("/ui/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify({ tracking_id: form.dataset.trackingId, question }),
+        body: JSON.stringify({
+          tracking_id: form.dataset.trackingId || null,
+          question,
+          history: history.slice(-MAX_HISTORY_TURNS),
+        }),
       });
       const result = await response.json();
       pending.remove();
       if (!response.ok || !result.success) {
         status.textContent = result.error?.message || "The assistant is unavailable. Please try again.";
-        appendMessage(log, status.textContent, "chat-assistant");
+        appendMessage(log, status.textContent, "chat-assistant chat-error");
         return;
       }
-      appendMessage(log, result.data.answer, "chat-assistant");
+      const data = result.data;
+      appendMessage(log, data.answer, "chat-assistant");
+      history.push({ role: "user", text: question }, { role: "assistant", text: data.answer });
+      // Keep the side panel on the parcel the conversation is about.
+      if (data.tracking_id && data.tracking_id !== form.dataset.trackingId) {
+        form.dataset.trackingId = data.tracking_id;
+        if (panel && data.panel_html) panel.innerHTML = data.panel_html;
+        const searchInput = document.getElementById("tracking_id");
+        if (searchInput) searchInput.value = data.tracking_id;
+        window.history.replaceState(null, "", `/?tracking_id=${encodeURIComponent(data.tracking_id)}`);
+      }
     } catch {
       pending.remove();
       status.textContent = "We couldn’t reach the assistant. Check your connection and try again.";
-      appendMessage(log, status.textContent, "chat-assistant");
+      appendMessage(log, status.textContent, "chat-assistant chat-error");
     } finally {
       button.disabled = false;
       if (label) label.hidden = false;

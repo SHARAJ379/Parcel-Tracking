@@ -18,7 +18,7 @@ Run these commands from the project folder:
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
 ```
 
@@ -31,6 +31,20 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 Fill in `.env.local` with the Supabase URL and service-role key. Keep real
 credentials out of source control; `.env.local` is ignored by Git.
+
+## Database files
+
+The full schema is version-controlled in `supabase/`. To build a new, empty
+Supabase project, run these in the SQL Editor in this order:
+
+1. [`supabase/schema.sql`](./supabase/schema.sql): base tables, indexes,
+   row-level security and service-role grants.
+2. Every file in `supabase/migrations/`, oldest timestamp first.
+3. [`supabase/seed.sql`](./supabase/seed.sql): the three `DEMO-PARCEL-*`
+   sample parcels. It skips rows that already exist.
+
+The existing project database already has all of this applied; do not re-run
+it there.
 
 ## Phase 2: Supabase migration
 
@@ -86,16 +100,25 @@ parcel/timeline queries remain separate.
   chronological timeline.
 - `PATCH /api/v1/parcels/{tracking_id}/status` (write): update status and add a
   timeline event in one database transaction.
-- `POST /api/v1/assistant` (read): ask about one owner's parcel and its
-  timeline using Gemini.
+- `POST /api/v1/assistant` (read): multi-turn chat about one owner's parcel and
+  its timeline using Gemini.
 
-The assistant request body is `{"tracking_id": "DEMO-PARCEL-001",
-"question": "What is the current status?"}`. Questions are limited to 1,000
-characters. The model receives only that owner's parcel and its timeline;
-question text and record values are explicitly treated as untrusted data.
-Missing parcel records return 404 without calling Gemini. Gemini timeouts
-return 504, upstream quota limits return 429, and other upstream or empty
-responses return 502 without exposing provider details.
+The assistant request body is `{"question": "...", "tracking_id": "...",
+"history": [{"role": "user" | "assistant", "text": "..."}]}`. Only `question`
+is required. The parcel is chosen in this order: a tracking ID written in the
+question, then `tracking_id`, then the latest ID the user wrote in `history`.
+IDs are matched as typed or in uppercase. `history` holds at most 10 earlier
+turns; each text is limited to 1,000 characters.
+
+The model receives only that owner's parcel and timeline (times converted to
+IST), the history and the question, all labelled as untrusted data. Its rules
+say to use only those records, reply in English, Hindi or Kannada, decline
+unrelated requests, and never act on instructions inside the data. With no
+tracking ID it is sent no records and asks for one. An unknown tracking ID
+returns 404 without calling Gemini. Gemini timeouts return 504, upstream quota
+limits return 429, and other upstream or empty responses return 502 without
+exposing provider details. The response data is `{"answer", "tracking_id",
+"parcel", "timeline"}`.
 
 API responses use `{"success": true, "data": ...}` or
 `{"success": false, "error": {"code": ..., "message": ...}}`. Invalid input is
@@ -235,9 +258,13 @@ Remove-Variable readKey, writeKey, webhookSecret
 Set `ADMIN_PASSWORD` and `SESSION_SECRET` in ignored `.env.local`. The public
 tracking page is at `/`, and the admin login is at `/admin/login`.
 
-- `/` accepts a `tracking_id` query parameter and displays status, ETA and
-  timeline without using an API key. The public page includes a parcel-grounded
-  assistant chat; its requests are rate-limited by client IP.
+- `/` is built around the assistant chat, with the parcel's status, ETA and
+  timeline beside it. No API key is needed. Users can type a tracking ID in a
+  message or use the search box (`?tracking_id=` also works without
+  JavaScript). The browser keeps the conversation and sends the last 10 turns
+  to `POST /ui/assistant`, which uses the same logic as the API and returns a
+  server-rendered parcel panel so the side panel follows the conversation.
+  Requests are rate-limited by client IP.
 - `/admin/login` signs in with `ADMIN_PASSWORD` and uses a signed, HttpOnly,
   SameSite=Lax session cookie.
 - `/admin` provides parcel creation/status updates, API-key creation/revocation,
