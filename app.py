@@ -38,7 +38,7 @@ from email_import import (
     sender_domain,
     sender_rejection,
 )
-from gemini_utils import generate_with_retry
+from gemini_utils import generate_with_fallback
 from webhooks import deliver_status_updated, validate_webhook_url
 
 load_dotenv(".env.local")
@@ -848,7 +848,7 @@ def generate_assistant_answer(
         ensure_ascii=False,
     )
     try:
-        response = generate_with_retry(
+        response = generate_with_fallback(
             gemini_client,
             model=get_gemini_model(),
             contents=prompt,

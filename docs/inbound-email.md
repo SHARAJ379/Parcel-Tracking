@@ -109,7 +109,7 @@ address), and a 5xx response as "try again later".
 | 403 | `sender_not_allowed`, `spf_not_passed` | Sender check failed |
 | 413 | `email_too_large` | Body over 1 MB |
 | 429 | `rate_limit_exceeded` | Over `INBOUND_EMAIL_RATE_LIMIT` this minute |
-| 503 | `assistant_timeout`, `assistant_busy`, `assistant_quota_exceeded`, `assistant_upstream_error` | Gemini unavailable (an overload is retried once first): the email is retried later |
+| 503 | `assistant_timeout`, `assistant_busy`, `assistant_quota_exceeded`, `assistant_upstream_error` | Gemini unavailable (the fallback model, or one retry, is tried first): the email is retried later |
 | 503 | `inbound_email_not_configured` | `INBOUND_EMAIL_SECRET` missing or too short |
 
 Example success body:

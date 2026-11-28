@@ -29,7 +29,7 @@ from postgrest.exceptions import APIError as PostgrestAPIError
 from pydantic import BaseModel, Field, ValidationError
 from supabase import Client
 
-from gemini_utils import generate_with_retry
+from gemini_utils import generate_with_fallback
 from webhooks import deliver_status_updated
 
 logger = logging.getLogger(__name__)
@@ -338,7 +338,7 @@ def extract_shipments(
         ensure_ascii=False,
     )
     try:
-        response = generate_with_retry(
+        response = generate_with_fallback(
             gemini_client,
             model=model,
             contents=prompt,

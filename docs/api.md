@@ -45,8 +45,14 @@ IST), the history and the question, all labelled as untrusted data. Its rules
 say to use only those records, reply in English, Hindi or Kannada, decline
 unrelated requests, and never act on instructions inside the data. With no
 tracking ID it is sent no records and asks for one. An unknown tracking ID
-returns 404 without calling Gemini. If Google reports a temporary overload
-(HTTP 500 or 503) the call is repeated once after 1.5 seconds. Timeouts,
+returns 404 without calling Gemini. If `GEMINI_FALLBACK_MODEL` is set and the
+main model returns 500, 503, 504 or times out, the same request is sent once
+to the fallback model straight away (no pause). Quota (429) and request
+errors (400, 404) never use the fallback. If it is not set, a 500 or 503 is
+repeated once on the main model after 1.5 seconds and a 504 is not repeated.
+Each Gemini call times out after 15 seconds, so one request waits at most
+30 seconds (31.5 without a fallback), inside the 60-second `maxDuration` in
+`vercel.json`. Timeouts,
 including Google's own deadline (504), return 504 `assistant_timeout`; an
 overload that continues returns 503 `assistant_busy`; quota limits return 429;
 other upstream or empty responses return 502. Provider details are logged on

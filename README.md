@@ -37,7 +37,7 @@ or shipping email; the app does not call courier APIs.
   a signed session cookie and CSRF tokens.
 - **Clean errors.** Gemini quota, overload and timeout problems return
   friendly 429, 503 and 504 responses without leaking provider details; a
-  temporary overload is retried once.
+  temporary overload is retried once, or sent to an optional fallback model.
 - **Browser protections.** Content-Security-Policy, no framing, nosniff and
   referrer policy headers; admin sign-in is limited to 5 attempts a minute.
 
@@ -100,6 +100,7 @@ Open http://127.0.0.1:8000 for the app, `/health` for a health check and
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side key. Never expose it in browser code |
 | `GEMINI_API_KEY` | Google AI Studio key |
 | `GEMINI_MODEL` | Exact model ID. It must work with your key and accept system instructions |
+| `GEMINI_FALLBACK_MODEL` | Optional second model, tried once when the main one returns 500, 503, 504 or times out. Empty means off |
 | `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Admin sign-in |
 | `SESSION_SECRET` | Long random string that signs the admin cookie |
 | `COOKIE_SECURE` | `true` on HTTPS hosting such as Vercel |
@@ -127,7 +128,7 @@ API and assistant checks. A GitHub Actions workflow (`.github/workflows/tests.ym
 app.py          FastAPI app: pages, admin, /api/v1 routes, Gemini assistant
 webhooks.py     Webhook URL checks, signed delivery, retries, logging
 email_import.py Forwarded email -> Gemini extraction -> validated parcel updates
-gemini_utils.py One retry when Gemini reports a temporary overload
+gemini_utils.py Optional fallback model when Gemini is busy or slow
 templates/      Jinja pages
 static/         CSS, small JavaScript, link preview image
 supabase/       schema.sql, seed.sql and migrations to run in the SQL Editor

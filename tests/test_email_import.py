@@ -807,3 +807,106 @@ def test_favicon_is_linked_and_served(email_client) -> None:
     assert '<link rel="icon" href="/static/favicon.svg"' in page.text
     icon = email_client.client.get("/static/favicon.svg")
     assert icon.status_code == 200 and "<svg" in icon.text
+
+
+# ---------- Optional fallback model ----------
+
+
+@pytest.fixture
+def fallback(email_client, monkeypatch):
+    """Main model 'test-model', fallback 'fallback-model'; records any sleep."""
+    import gemini_utils
+
+    monkeypatch.setenv("GEMINI_FALLBACK_MODEL", "fallback-model")
+    slept = []
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda seconds: slept.append(seconds))
+    email_client.slept = slept
+    email_client.db.add_parcel(tracking_id="DEMO-PARCEL-001", status="in_transit")
+    return email_client
+
+
+def models_called(ctx):
+    return [call["model"] for call in ctx.gemini.calls]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        gemini_error(500, "INTERNAL"),
+        gemini_error(503, "UNAVAILABLE"),
+        gemini_error(504, "DEADLINE_EXCEEDED"),
+        httpx2.TimeoutException("slow"),
+    ],
+    ids=["500", "503", "504", "timeout"],
+)
+def test_chat_uses_fallback_model_at_once_when_main_model_is_busy(fallback, failure) -> None:
+    fallback.gemini.replies += [failure, "It is in transit."]
+    response = fallback.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert response.status_code == 200
+    assert response.json()["data"]["answer"] == "It is in transit."
+    assert models_called(fallback) == ["test-model", "fallback-model"]
+    assert fallback.slept == []  # no pause before falling back
+
+
+def test_email_import_uses_fallback_model(fallback) -> None:
+    fallback.gemini.replies += [
+        gemini_error(504, "DEADLINE_EXCEEDED"),
+        gemini_reply(shipment(courier="Blue Dart", tracking_number="81234567890",
+                              status="out_for_delivery", destination_city="MYSURU")),
+    ]
+    response = post_email(fallback, cloudmailin_payload(plain=samples.bluedart_out_for_delivery()))
+    assert response.status_code == 200
+    assert response.json()["data"]["result"] == "imported"
+    assert models_called(fallback) == ["test-model", "fallback-model"]
+
+
+def test_when_both_models_fail_it_stops_after_two_calls(fallback) -> None:
+    fallback.gemini.replies += [gemini_error(503, "UNAVAILABLE"), gemini_error(503, "UNAVAILABLE")]
+    chat = fallback.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert chat.status_code == 503 and chat.json()["error"]["code"] == "assistant_busy"
+
+    fallback.gemini.replies += [httpx2.TimeoutException("slow"), httpx2.TimeoutException("slow")]
+    mail = post_email(fallback, cloudmailin_payload(plain=samples.amazon_shipped()))
+    assert mail.status_code == 503 and mail.json()["error"]["code"] == "assistant_timeout"
+    assert models_called(fallback) == ["test-model", "fallback-model"] * 2
+    assert fallback.slept == []
+
+
+@pytest.mark.parametrize("failure, status", [(gemini_error(429, "RESOURCE_EXHAUSTED"), 429),
+                                             (gemini_error(400, "INVALID_ARGUMENT"), 502)])
+def test_quota_and_request_errors_do_not_use_the_fallback(fallback, failure, status) -> None:
+    fallback.gemini.replies.append(failure)
+    response = fallback.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert response.status_code == status
+    assert models_called(fallback) == ["test-model"]
+
+
+def test_without_fallback_the_old_behaviour_is_kept(email_client, monkeypatch) -> None:
+    import gemini_utils
+
+    slept = []
+    monkeypatch.setattr(gemini_utils.time, "sleep", lambda seconds: slept.append(seconds))
+    email_client.db.add_parcel(tracking_id="DEMO-PARCEL-001", status="in_transit")
+    for unset_or_same in (None, "", "test-model"):  # same as the main model counts as unset
+        if unset_or_same is None:
+            monkeypatch.delenv("GEMINI_FALLBACK_MODEL", raising=False)
+        else:
+            monkeypatch.setenv("GEMINI_FALLBACK_MODEL", unset_or_same)
+        email_client.gemini.calls.clear()
+        slept.clear()
+        email_client.gemini.replies += [gemini_error(503, "UNAVAILABLE"), "It is in transit."]
+        response = email_client.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+        assert response.status_code == 200
+        assert models_called(email_client) == ["test-model", "test-model"]  # same model, once
+        assert slept == [gemini_utils.RETRY_DELAY_SECONDS]
+
+
+def test_worst_case_gemini_time_fits_the_vercel_limit() -> None:
+    import gemini_utils
+
+    config = json.load(open("vercel.json", encoding="utf-8"))
+    max_duration = config["functions"]["app.py"]["maxDuration"]
+    timeout = app_module.GEMINI_REQUEST_TIMEOUT_MS / 1000
+    with_fallback = 2 * timeout
+    without_fallback = 2 * timeout + gemini_utils.RETRY_DELAY_SECONDS
+    assert max(with_fallback, without_fallback) + 10 <= max_duration  # 10 s for database work
