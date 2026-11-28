@@ -35,8 +35,11 @@ or shipping email; the app does not call courier APIs.
 - **Admin dashboard** for parcels, email imports (with a "Paste email text"
   box), API keys, webhooks and delivery logs, behind
   a signed session cookie and CSRF tokens.
-- **Clean errors.** Gemini quota and timeout problems return friendly 429 and
-  504 responses without leaking provider details.
+- **Clean errors.** Gemini quota, overload and timeout problems return
+  friendly 429, 503 and 504 responses without leaking provider details; a
+  temporary overload is retried once.
+- **Browser protections.** Content-Security-Policy, no framing, nosniff and
+  referrer policy headers; admin sign-in is limited to 5 attempts a minute.
 
 ## Tech stack
 
@@ -124,6 +127,7 @@ API and assistant checks. A GitHub Actions workflow (`.github/workflows/tests.ym
 app.py          FastAPI app: pages, admin, /api/v1 routes, Gemini assistant
 webhooks.py     Webhook URL checks, signed delivery, retries, logging
 email_import.py Forwarded email -> Gemini extraction -> validated parcel updates
+gemini_utils.py One retry when Gemini reports a temporary overload
 templates/      Jinja pages
 static/         CSS, small JavaScript, link preview image
 supabase/       schema.sql, seed.sql and migrations to run in the SQL Editor

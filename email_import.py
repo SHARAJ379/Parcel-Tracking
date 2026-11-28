@@ -29,6 +29,7 @@ from postgrest.exceptions import APIError as PostgrestAPIError
 from pydantic import BaseModel, Field, ValidationError
 from supabase import Client
 
+from gemini_utils import generate_with_retry
 from webhooks import deliver_status_updated
 
 logger = logging.getLogger(__name__)
@@ -337,7 +338,8 @@ def extract_shipments(
         ensure_ascii=False,
     )
     try:
-        response = gemini_client.models.generate_content(
+        response = generate_with_retry(
+            gemini_client,
             model=model,
             contents=prompt,
             config=genai_types.GenerateContentConfig(
@@ -354,6 +356,12 @@ def extract_shipments(
         if exc.code == 429:
             logger.warning("Gemini quota limit reached during email import.")
             raise EmailImportError("assistant_quota_exceeded") from None
+        if exc.code == 504:
+            logger.warning("Gemini deadline exceeded during email import.")
+            raise EmailImportError("assistant_timeout") from None
+        if exc.code in (500, 503):
+            logger.warning("Gemini busy during email import (HTTP %s).", exc.code)
+            raise EmailImportError("assistant_busy") from None
         logger.error(
             "Gemini email extraction failed with HTTP status %s (%s): %s",
             exc.code,

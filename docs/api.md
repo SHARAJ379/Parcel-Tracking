@@ -45,16 +45,26 @@ IST), the history and the question, all labelled as untrusted data. Its rules
 say to use only those records, reply in English, Hindi or Kannada, decline
 unrelated requests, and never act on instructions inside the data. With no
 tracking ID it is sent no records and asks for one. An unknown tracking ID
-returns 404 without calling Gemini. Gemini timeouts return 504, upstream quota
-limits return 429, and other upstream or empty responses return 502 without
-exposing provider details. The response data is `{"answer", "tracking_id",
+returns 404 without calling Gemini. If Google reports a temporary overload
+(HTTP 500 or 503) the call is repeated once after 1.5 seconds. Timeouts,
+including Google's own deadline (504), return 504 `assistant_timeout`; an
+overload that continues returns 503 `assistant_busy`; quota limits return 429;
+other upstream or empty responses return 502. Provider details are logged on
+the server, never returned. The response data is `{"answer", "tracking_id",
 "parcel", "timeline"}`.
 
 API responses use `{"success": true, "data": ...}` or
 `{"success": false, "error": {"code": ..., "message": ...}}`. Invalid input is
 returned as HTTP 400; missing/invalid keys as 401; missing scope as 403;
 unknown or other-owner parcels as 404; duplicate tracking IDs as 409; and
-rate-limited requests as 429.
+rate-limited requests as 429 with a `Retry-After` header (seconds until the
+next UTC minute). Admin sign-in is limited to 5 attempts per IP per minute.
+
+Every response carries `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+DENY`, `Referrer-Policy` and `Permissions-Policy` headers. Pages also send a
+Content-Security-Policy that allows only this site's scripts (plus the hashed
+inline theme script), Google Fonts, and no framing. `/docs` skips the CSP
+because Swagger UI loads from a CDN. Vercel adds HSTS.
 
 ## Webhooks
 

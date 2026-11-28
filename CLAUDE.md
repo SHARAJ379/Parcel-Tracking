@@ -43,6 +43,7 @@ marketing filler.
 
 - `app.py` — FastAPI app: pages, admin, `/api/v1` routes, Gemini assistant.
 - `webhooks.py` — webhook URL validation, signed delivery, retries, logging.
+- `gemini_utils.py` — one retry when Gemini reports a temporary overload.
 - `email_import.py` — forwarded email import: redaction, Gemini extraction,
   validation, parcel create/update. Docs in `docs/inbound-email.md`.
 - `templates/`, `static/` — Jinja pages, CSS, small JS for chat and copy buttons.

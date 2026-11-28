@@ -83,12 +83,14 @@ class MemoryDatabase:
         self.tables = {"parcels": [], "parcel_events": [], "email_imports": []}
         self.rate_limit_allowed = True
         self.rpc_calls = []
+        self.rpc_params = []
 
     def table(self, name):
         return MemoryQuery(self, name)
 
     def rpc(self, name, params):
         self.rpc_calls.append(name)
+        self.rpc_params.append((name, params))
         return SimpleNamespace(execute=lambda: SimpleNamespace(data=self._rpc(name, params)))
 
     def add_parcel(self, **fields):
@@ -693,3 +695,115 @@ def test_decline_sentence_is_only_for_unrelated_requests() -> None:
     assert '"I can only assist with tracking."' in rules
     assert "only\n   when declining" in rules
     assert "never add it to answers about a parcel" in rules
+
+
+# ---------- Fixes from the live review ----------
+
+
+def gemini_error(code, status):
+    from google.genai import errors as genai_errors
+
+    return genai_errors.APIError(code, {"error": {"message": "test", "status": status}})
+
+
+@pytest.fixture
+def no_retry_wait(monkeypatch):
+    import gemini_utils
+
+    monkeypatch.setattr(gemini_utils, "RETRY_DELAY_SECONDS", 0)
+
+
+def test_chat_retries_once_when_gemini_is_overloaded(email_client, no_retry_wait) -> None:
+    email_client.db.add_parcel(tracking_id="DEMO-PARCEL-001", status="in_transit")
+    email_client.gemini.replies += [gemini_error(503, "UNAVAILABLE"), "It is in transit."]
+    response = email_client.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert response.status_code == 200
+    assert len(email_client.gemini.calls) == 2
+
+
+def test_chat_reports_busy_and_timeout_clearly(email_client, no_retry_wait) -> None:
+    email_client.db.add_parcel(tracking_id="DEMO-PARCEL-001", status="in_transit")
+    email_client.gemini.replies += [gemini_error(503, "UNAVAILABLE"), gemini_error(503, "UNAVAILABLE")]
+    busy = email_client.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert busy.status_code == 503
+    assert busy.json()["error"]["code"] == "assistant_busy"
+
+    email_client.gemini.replies.append(gemini_error(504, "DEADLINE_EXCEEDED"))
+    calls_before = len(email_client.gemini.calls)
+    slow = email_client.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert slow.status_code == 504
+    assert slow.json()["error"]["code"] == "assistant_timeout"
+    assert len(email_client.gemini.calls) == calls_before + 1  # a 504 is not retried
+
+
+def test_inbound_email_retries_then_asks_for_redelivery(email_client, no_retry_wait) -> None:
+    email_client.gemini.replies += [gemini_error(503, "UNAVAILABLE"), gemini_error(503, "UNAVAILABLE")]
+    response = post_email(email_client, cloudmailin_payload(plain=samples.amazon_shipped()))
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "assistant_busy"
+    assert len(email_client.gemini.calls) == 2
+
+
+def test_security_headers_on_pages_and_api(email_client) -> None:
+    page = email_client.client.get("/")
+    csp = page.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp and "default-src 'self'" in csp
+    assert page.headers["x-frame-options"] == "DENY"
+    assert page.headers["x-content-type-options"] == "nosniff"
+    assert page.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    api = email_client.client.get("/api/v1/parcels/DEMO-PARCEL-001")
+    assert api.headers["x-content-type-options"] == "nosniff"
+    docs = email_client.client.get("/docs")
+    assert "content-security-policy" not in docs.headers  # Swagger UI needs its CDN
+    assert docs.headers["x-frame-options"] == "DENY"
+
+
+def test_csp_hash_matches_the_inline_theme_script() -> None:
+    import base64
+    import hashlib
+    import re
+
+    html = open("templates/base.html", encoding="utf-8").read()
+    [script] = re.findall(r"<script>(.*?)</script>", html, re.S)
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
+    assert app_module.THEME_SCRIPT_HASH == f"sha256-{digest}"
+
+
+def test_admin_sign_in_is_rate_limited_per_ip(email_client, monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_USERNAME", "test-admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "test-admin-password")
+    wrong = email_client.client.post("/admin/login", data={"username": "x", "password": "y"})
+    assert wrong.status_code == 401
+    name, params = email_client.db.rpc_params[-1]
+    assert name == "consume_rate_limit" and params["p_limit"] == 5
+    public_subject = app_module.hashlib.sha256(b"testclient").hexdigest()
+    assert params["p_client_ip_hash"] != public_subject  # its own counter
+
+    email_client.db.rate_limit_allowed = False
+    blocked = email_client.client.post(
+        "/admin/login", data={"username": "test-admin", "password": "test-admin-password"},
+        headers={"Accept": "application/json"},
+    )
+    assert blocked.status_code == 429
+    assert "set-cookie" not in blocked.headers
+    assert 1 <= int(blocked.headers["retry-after"]) <= 60
+
+
+def test_rate_limited_responses_say_when_to_retry(email_client) -> None:
+    email_client.db.rate_limit_allowed = False
+    response = email_client.client.post("/ui/assistant", json={"question": "Where is DEMO-PARCEL-001?"})
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["retry-after"]) <= 60
+
+
+def test_language_rule_keeps_the_question_script() -> None:
+    rules = app_module.ASSISTANT_SYSTEM_INSTRUCTION
+    assert "language and script of untrusted_question" in rules
+    assert "gets a reply in Latin letters" in rules
+
+
+def test_favicon_is_linked_and_served(email_client) -> None:
+    page = email_client.client.get("/")
+    assert '<link rel="icon" href="/static/favicon.svg"' in page.text
+    icon = email_client.client.get("/static/favicon.svg")
+    assert icon.status_code == 200 and "<svg" in icon.text
