@@ -20,6 +20,18 @@ parcel/timeline queries remain separate.
   timeline event in one database transaction.
 - `POST /api/v1/assistant` (read): multi-turn chat about one owner's parcel and
   its timeline using Gemini.
+- `POST /api/v1/inbound-email`: CloudMailin target for forwarded emails. It
+  uses `Authorization: Bearer <INBOUND_EMAIL_SECRET>` instead of an API key.
+  See [inbound-email.md](./inbound-email.md) for the payload and status codes.
+
+`{tracking_id}` and IDs in chat may also be a courier AWB number or a shop
+order ID. Lookup tries the tracking ID, then the AWB, then the order ID. If an
+order ID matches several parcels, the response is 409 `ambiguous_order_id` and
+the message lists their tracking IDs. Chat recognises IDs with letters and
+digits (`DEMO-PARCEL-001`, `OD123456789012345678`), Amazon order IDs
+(`403-1234567-7654321`) and digit-only numbers of 10 to 20 digits (Blue Dart
+AWBs). Parcel responses also include `courier`, `order_id`, `awb_number` and
+`items`, which are `null` or empty for parcels not imported from email.
 
 The assistant request body is `{"question": "...", "tracking_id": "...",
 "history": [{"role": "user" | "assistant", "text": "..."}]}`. Only `question`

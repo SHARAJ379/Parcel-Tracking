@@ -41,7 +41,7 @@
     <form method="get" action="/" class="tracking-search" data-loading-form>
       <label for="tracking_id">Track a parcel</label>
       <div class="search-controls">
-        <input id="tracking_id" name="tracking_id" class="mono-input" value="{{ tracking_id }}" maxlength="80" placeholder="Enter tracking ID" autocomplete="off" spellcheck="false" required>
+        <input id="tracking_id" name="tracking_id" class="mono-input" value="{{ tracking_id }}" maxlength="80" placeholder="Tracking ID, AWB or order ID" autocomplete="off" spellcheck="false" required>
         <button type="submit" class="button-secondary"><span class="button-label">Track</span><span class="button-loading" hidden>Tracking</span></button>
       </div>
     </form>
@@ -56,7 +56,12 @@
     </section>
 
     <div data-parcel-panel>
-      {% if not_found %}
+      {% if lookup_message %}
+      <section class="notice notice-error" role="status">
+        <strong>Several shipments found.</strong>
+        <span>{{ lookup_message }}</span>
+      </section>
+      {% elif not_found %}
       <section class="notice notice-error" role="status">
         <strong>Parcel not found.</strong>
         <span>Check the tracking ID and try again.</span>

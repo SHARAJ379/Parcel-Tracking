@@ -43,7 +43,10 @@ marketing filler.
 
 - `app.py` — FastAPI app: pages, admin, `/api/v1` routes, Gemini assistant.
 - `webhooks.py` — webhook URL validation, signed delivery, retries, logging.
+- `email_import.py` — forwarded email import: redaction, Gemini extraction,
+  validation, parcel create/update. Docs in `docs/inbound-email.md`.
 - `templates/`, `static/` — Jinja pages, CSS, small JS for chat and copy buttons.
 - `supabase/migrations/` — SQL the user runs in the Supabase SQL Editor.
-- `tests/test_app.py` — pytest suite with a fake Supabase client; run with
+- `tests/test_app.py`, `tests/test_email_import.py` — pytest suites with fake
+  Supabase and Gemini clients (sample emails in `tests/sample_emails.py`); run with
   `.venv\Scripts\python.exe -m pytest -q`.

@@ -24,9 +24,9 @@
   <div class="parcel-status">
     <p class="parcel-status-label"><span class="status-dot" aria-hidden="true"></span>{{ status_text }}</p>
     {% if parcel.status == "delivered" %}
-    <p class="parcel-eta"><span>Delivered to</span> {{ parcel.destination }}</p>
+    <p class="parcel-eta"><span>Delivered to</span> {{ parcel.destination or "Destination not provided" }}</p>
     {% else %}
-    <p class="parcel-eta"><span>Estimated arrival</span> {{ parcel.eta|ist_datetime }}</p>
+    <p class="parcel-eta"><span>Estimated arrival</span> {{ parcel.eta|ist_eta }}</p>
     {% endif %}
   </div>
 
@@ -49,8 +49,14 @@
   </ol>
 
   <dl class="parcel-facts">
-    <div><dt>Destination</dt><dd>{{ parcel.destination }}</dd></div>
+    <div><dt>Destination</dt><dd>{{ parcel.destination or "Not provided" }}</dd></div>
     <div><dt>Last update</dt><dd>{{ parcel.updated_at|ist_datetime }}</dd></div>
+    {% if parcel.courier %}<div><dt>Courier</dt><dd>{{ parcel.courier }}</dd></div>{% endif %}
+    {% if parcel.awb_number and parcel.awb_number != parcel.tracking_id %}<div><dt>AWB number</dt><dd class="tracking-code">{{ parcel.awb_number }}</dd></div>{% endif %}
+    {% if parcel.order_id %}<div><dt>Order ID</dt><dd class="tracking-code">{{ parcel.order_id }}</dd></div>{% endif %}
+    {# .get(), because parcel.items (and parcel["items"] when missing) is the dict method #}
+    {% set parcel_items = parcel.get("items") or [] %}
+    {% if parcel_items %}<div><dt>Items</dt><dd>{{ parcel_items|join(", ") }}</dd></div>{% endif %}
   </dl>
 
   <h3 class="timeline-title">Timeline</h3>

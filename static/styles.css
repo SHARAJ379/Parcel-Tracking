@@ -392,6 +392,10 @@ button.link-button:hover { color: var(--text); background: transparent; text-dec
 .admin-section > form.form-grid { padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); align-items: end; gap: 12px 16px; }
 .form-grid > button { justify-self: start; }
+.email-import-form { display: grid; gap: 12px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.email-import-form textarea { min-height: 200px; resize: vertical; }
+.email-import-form > button { justify-self: start; }
+.admin-section > p.muted { margin: 0 0 12px; font-size: 14px; }
 .table-scroll { position: relative; width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th, td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 14px; white-space: nowrap; }
@@ -481,6 +485,8 @@ button.copy-code:hover { border-color: var(--accent); color: #fff; background: #
   .admin-tabs [role="tab"] { flex: 1; padding: 0 6px; }
   .admin-section > form.form-grid { padding: 16px; }
   .form-grid > button { width: 100%; }
+  .email-import-form { padding: 16px; }
+  .email-import-form > button { width: 100%; }
   .login-card, .key-created-card { padding: 24px 20px; }
   .copy-field { flex-direction: column; }
   .docs-heading h1 { font-size: 26px; }

@@ -51,3 +51,20 @@ This generates random read-only and read/write keys, stores only their hashes
 in Supabase, and writes the local test keys to the ignored `.env.local` file
 without displaying them. These keys are only for local testing; revoke them in
 Supabase when finished.
+
+## Email import migration
+
+Run
+[`supabase/migrations/20261128100000_email_imports.sql`](../supabase/migrations/20261128100000_email_imports.sql)
+once in the Supabase SQL Editor, after the rate-limit migration. It:
+
+- adds optional `courier`, `order_id`, `awb_number`, `items` and `source`
+  columns to `parcels` (existing parcels get `source = 'manual'`), a unique
+  index on `awb_number` and an index on `order_id`;
+- creates the `email_imports` log table (no email content), with RLS on and
+  access only for the service role;
+- creates `create_parcel_from_email` and `apply_email_update`, which write the
+  parcel and its timeline event in one transaction.
+
+It does not change, delete or reseed existing rows. Deploy the new code only
+after it has run, because the app now reads the new columns.

@@ -2,7 +2,7 @@
 {% block title %}Admin operations{% endblock %}
 {% block content %}
 <section class="page-heading admin-heading">
-  <div><h1>Admin operations</h1><p>Parcels, API access, and webhook delivery history.</p></div>
+  <div><h1>Admin operations</h1><p>Parcels, email imports, API access, and webhook delivery history.</p></div>
   <form method="post" action="/admin/logout">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button class="button-secondary" type="submit">Sign out</button>
@@ -13,6 +13,7 @@
 
 <nav class="admin-tabs" role="tablist" aria-label="Admin sections">
   <button type="button" role="tab" id="tab-parcels" aria-controls="panel-parcels" aria-selected="true">Parcels</button>
+  <button type="button" role="tab" id="tab-email" aria-controls="panel-email" aria-selected="false" tabindex="-1">Email imports</button>
   <button type="button" role="tab" id="tab-keys" aria-controls="panel-keys" aria-selected="false" tabindex="-1">API keys</button>
   <button type="button" role="tab" id="tab-webhooks" aria-controls="panel-webhooks" aria-selected="false" tabindex="-1">Webhooks</button>
 </nav>
@@ -33,14 +34,20 @@
     {% if parcels %}
     <div class="table-scroll" role="region" aria-label="Recent parcels" tabindex="0">
       <table>
-        <thead><tr><th scope="col">Tracking ID</th><th scope="col">Destination</th><th scope="col">Status</th><th scope="col">ETA</th><th scope="col">Update status</th></tr></thead>
+        <thead><tr><th scope="col">Tracking ID</th><th scope="col">References</th><th scope="col">Destination</th><th scope="col">Status</th><th scope="col">ETA</th><th scope="col">Update status</th></tr></thead>
         <tbody>
           {% for parcel in parcels %}
           <tr>
-            <td><strong class="tracking-code">{{ parcel.tracking_id }}</strong></td>
-            <td>{{ parcel.destination }}</td>
+            <td><strong class="tracking-code">{{ parcel.tracking_id }}</strong>{% if parcel.source == "email" %}<br><span class="muted">From email</span>{% endif %}</td>
+            <td class="wrap-cell">
+              {% if parcel.courier %}{{ parcel.courier }}<br>{% endif %}
+              {% if parcel.order_id %}<span class="muted">Order</span> <code>{{ parcel.order_id }}</code><br>{% endif %}
+              {% if parcel.awb_number and parcel.awb_number != parcel.tracking_id %}<span class="muted">AWB</span> <code>{{ parcel.awb_number }}</code>{% endif %}
+              {% if not (parcel.courier or parcel.order_id or (parcel.awb_number and parcel.awb_number != parcel.tracking_id)) %}<span class="muted">None</span>{% endif %}
+            </td>
+            <td>{{ parcel.destination or "Not provided" }}</td>
             <td><span class="status-badge status-{{ parcel.status|replace('_', '-') }}">{{ parcel.status|replace('_', ' ')|capitalize }}</span></td>
-            <td>{{ parcel.eta|ist_datetime }}</td>
+            <td>{{ parcel.eta|ist_eta }}</td>
             <td>
               <form method="post" action="/admin/parcels/{{ parcel.tracking_id }}/status" class="inline-form" data-loading-form>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -63,6 +70,33 @@
     {% else %}
     <p class="empty-state">No parcels yet. Create one above to begin.</p>
     {% endif %}
+  </section>
+</section>
+
+<section class="tab-panel" id="panel-email" role="tabpanel" aria-labelledby="tab-email" hidden>
+  <section class="admin-section">
+    <h2>Paste email text</h2>
+    <p class="muted">Paste a shipping or order email (text or HTML source). It goes through the same extraction as forwarded emails. Phone numbers, email addresses and card endings are removed before extraction, and the email itself is not stored.</p>
+    <form method="post" action="/admin/email-imports" class="email-import-form" data-loading-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="email-text">Email text<textarea id="email-text" name="email_text" rows="10" maxlength="{{ email_text_max }}" required spellcheck="false"></textarea></label>
+      <button type="submit"><span class="button-label">Import email</span><span class="button-loading" hidden>Importing…</span></button>
+    </form>
+  </section>
+  <section class="admin-section">
+    <h2>Recent email imports</h2>
+    {% if email_imports %}
+    <div class="table-scroll" role="region" aria-label="Recent email imports" tabindex="0">
+      <table><thead><tr><th scope="col">Received</th><th scope="col">Source</th><th scope="col">Result</th><th scope="col">Reason</th><th scope="col">Parcels</th></tr></thead>
+      <tbody>{% for item in email_imports %}<tr>
+        <td>{{ item.received_at|ist_datetime }}</td>
+        <td>{{ "Pasted in admin" if item.source == "admin_paste" else "Email" }}{% if item.sender_domain %}<br><span class="muted">{{ item.sender_domain }}</span>{% endif %}</td>
+        <td><span class="status-badge {% if item.result in ['imported', 'updated', 'unchanged'] %}status-delivered{% else %}status-failed{% endif %}">{{ item.result|replace('_', ' ')|capitalize }}</span></td>
+        <td class="wrap-cell"><code>{{ item.reason }}</code></td>
+        <td class="wrap-cell">{% for tid in item.tracking_ids %}<a class="tracking-code" href="/?tracking_id={{ tid|urlencode }}">{{ tid }}</a>{% if not loop.last %}, {% endif %}{% else %}<span class="muted">None</span>{% endfor %}</td>
+      </tr>{% endfor %}</tbody></table>
+    </div>
+    {% else %}<p class="empty-state">No emails have been imported yet.</p>{% endif %}
   </section>
 </section>
 

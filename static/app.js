@@ -112,6 +112,14 @@ document.querySelectorAll('[role="tablist"] [role="tab"]').forEach((tab) => {
   });
 });
 
+// /admin#email opens the "Email imports" tab, e.g. after pasting an email.
+if (location.hash.length > 1) {
+  const hashTab = document.querySelector(
+    `[role="tab"][aria-controls="panel-${CSS.escape(location.hash.slice(1))}"]`
+  );
+  if (hashTab) selectTab(hashTab);
+}
+
 function selectTab(selectedTab) {
   const tablist = selectedTab.parentElement;
   tablist.querySelectorAll('[role="tab"]').forEach((tab) => {

@@ -8,7 +8,8 @@ protected REST API and signed webhooks.
 **Live demo:** https://parcel-tracking-dusky.vercel.app (try tracking ID
 `DEMO-PARCEL-001`) · [API guide](https://parcel-tracking-dusky.vercel.app/docs-guide)
 
-The parcels are simulated. The app does not connect to real courier services.
+Demo parcels are simulated. Real parcels can be added by forwarding an order
+or shipping email; the app does not call courier APIs.
 
 ## Features
 
@@ -25,7 +26,14 @@ The parcels are simulated. The app does not connect to real courier services.
   as SHA-256 hashes, and are rate limited per key and per client IP.
 - **Webhooks.** Register an HTTPS endpoint and receive status updates signed
   with HMAC-SHA256, with up to three delivery attempts logged.
-- **Admin dashboard** for parcels, API keys, webhooks and delivery logs, behind
+- **Parcels from forwarded emails.** Forward an Amazon, Flipkart or Blue Dart
+  email to a CloudMailin address. Gemini extracts courier, order ID, AWB,
+  items, status, ETA and city as JSON; Python keeps only values written in
+  the email, then creates or updates the parcel and sends the webhook when the
+  status changes. Search by tracking ID, AWB or order ID. See
+  [docs/inbound-email.md](./docs/inbound-email.md).
+- **Admin dashboard** for parcels, email imports (with a "Paste email text"
+  box), API keys, webhooks and delivery logs, behind
   a signed session cookie and CSRF tokens.
 - **Clean errors.** Gemini quota and timeout problems return friendly 429 and
   504 responses without leaking provider details.
@@ -47,6 +55,7 @@ The parcels are simulated. The app does not connect to real courier services.
 ```
 Browser ──► FastAPI (app.py) ──► Supabase  (parcels, events, keys, limits)
 Other apps ─► /api/v1 + x-api-key   │
+CloudMailin ─► /api/v1/inbound-email ├──► email_import.py ──► Gemini (JSON)
                                     ├──► Gemini  (answers from the records)
                                     └──► webhooks.py ──► your HTTPS endpoint
 ```
@@ -92,6 +101,10 @@ Open http://127.0.0.1:8000 for the app, `/health` for a health check and
 | `SESSION_SECRET` | Long random string that signs the admin cookie |
 | `COOKIE_SECURE` | `true` on HTTPS hosting such as Vercel |
 | `RATE_LIMIT_REQUESTS` | Requests per minute, 1 to 10,000. Default 60 |
+| `INBOUND_EMAIL_SECRET` | At least 24 characters. CloudMailin's Authorization header is `Bearer <secret>` |
+| `ALLOWED_EMAIL_SENDERS` | Comma-separated addresses allowed to forward parcel emails |
+| `INBOUND_REQUIRE_SPF` | `true` (default) requires an SPF pass for forwarded emails |
+| `INBOUND_EMAIL_RATE_LIMIT` | Email imports per minute, 1 to 1,000. Default 10 |
 
 On Vercel, add the same variables in the project settings. Redeploy after you
 change one, because new values only apply to new deployments.
@@ -110,6 +123,7 @@ API and assistant checks. A GitHub Actions workflow (`.github/workflows/tests.ym
 ```
 app.py          FastAPI app: pages, admin, /api/v1 routes, Gemini assistant
 webhooks.py     Webhook URL checks, signed delivery, retries, logging
+email_import.py Forwarded email -> Gemini extraction -> validated parcel updates
 templates/      Jinja pages
 static/         CSS, small JavaScript, link preview image
 supabase/       schema.sql, seed.sql and migrations to run in the SQL Editor
@@ -122,6 +136,7 @@ docs/           Database setup, API notes, testing, webhook walkthrough
 
 - [Database setup](./docs/database.md)
 - [API notes](./docs/api.md)
+- [Parcels from forwarded emails](./docs/inbound-email.md)
 - [Testing](./docs/testing.md)
 - [Testing a webhook](./docs/webhook-testing.md)
 - [Contributing](./CONTRIBUTING.md) · [Security policy](./SECURITY.md)
@@ -135,7 +150,8 @@ On Vercel, choose the FastAPI preset. `pyproject.toml` sets
 
 ## Known limitations
 
-- Parcel data is simulated, with no real courier integration.
+- Demo parcel data is simulated, with no courier API integration. Email
+  import only knows what the forwarded emails say.
 - Rate-limit rows are never deleted automatically, so that table keeps growing.
 - Client IPs are stored as plain SHA-256 hashes, which are not fully anonymous.
 - The chat limit is per minute only, with no daily cap. The free Gemini quota

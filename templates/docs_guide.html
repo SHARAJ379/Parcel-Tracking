@@ -15,6 +15,7 @@
     <a href="#update-status">Update status</a>
     <a href="#assistant">Parcel assistant</a>
     <a href="#webhooks">Webhooks</a>
+    <a href="#inbound-email">Inbound email</a>
     <a href="#responses">Responses and errors</a>
   </aside>
   <div class="docs-content">
@@ -34,7 +35,7 @@
     </section>
     <section class="docs-section" id="get-parcel">
       <h2>Get tracking details <span class="method-label">GET · 200</span></h2>
-      <p>Returns an owner-scoped parcel and its timeline in chronological order.</p>
+      <p>Returns an owner-scoped parcel and its timeline in chronological order. The ID may be the tracking ID, a courier AWB number or a shop order ID. An order ID with several shipments returns 409 <code>ambiguous_order_id</code> listing their tracking IDs.</p>
       <div class="code-block"><button type="button" class="copy-code" data-copy-code>Copy</button><pre><code>curl https://your-app.example/api/v1/parcels/DEMO-PARCEL-001 \
   -H "x-api-key: YOUR_READ_KEY"</code></pre></div>
     </section>
@@ -77,6 +78,12 @@ curl -X DELETE https://your-app.example/api/v1/webhooks/WEBHOOK_UUID \
   -H "x-api-key: YOUR_WRITE_KEY"</code></pre></div>
       <h3>Verify delivery signatures</h3>
       <p>Compute HMAC-SHA256 over the exact UTF-8 request body using the webhook secret. Compare it with <code>X-Signature: sha256=&lt;lowercase-hex-digest&gt;</code>. Do not parse and re-serialize the body first.</p>
+    </section>
+    <section class="docs-section" id="inbound-email">
+      <h2>Inbound email <span class="method-label">POST · 200</span></h2>
+      <p>CloudMailin posts forwarded parcel emails here in its JSON (Normalized) format. This route uses <code>Authorization: Bearer &lt;INBOUND_EMAIL_SECRET&gt;</code> instead of an API key, and only senders in <code>ALLOWED_EMAIL_SENDERS</code> are accepted. Gemini extracts the shipments; only values written in the email are stored.</p>
+      <div class="code-block"><button type="button" class="copy-code" data-copy-code>Copy</button><pre><code>curl -X POST https://your-app.example/api/v1/inbound-email   -H "Authorization: Bearer YOUR_INBOUND_SECRET"   -H "Content-Type: application/json"   -d '{"envelope":{"from":"you@example.com","spf":{"result":"pass"}},"headers":{"message_id":"&lt;test-1@example.com&gt;"},"plain":"Waybill No. 81234567890 is out for delivery to MYSURU. Blue Dart"}'</code></pre></div>
+      <p>200 returns <code>result</code>: <code>imported</code>, <code>updated</code>, <code>unchanged</code>, <code>no_shipment</code>, <code>failed</code> or <code>duplicate</code>. 401 wrong secret, 403 sender not allowed or SPF failed, 413 over 1 MB, 429 rate limited, 503 Gemini unavailable (CloudMailin retries).</p>
     </section>
     <section class="docs-section" id="responses">
       <h2>Responses and errors</h2>
